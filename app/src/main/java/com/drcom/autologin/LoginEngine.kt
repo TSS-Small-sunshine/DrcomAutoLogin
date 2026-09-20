@@ -29,8 +29,8 @@ object LoginEngine {
     private const val LOGIN_TIMEOUT_MS = 12000
     private const val MAC_FALLBACK = "000000000000"
 
-    private val JSONP_GREEDY = Regex("\\((\\{.*\\})\\)", RegexOption.DOT_MULTILINE)
-    private val JSONP_LAZY = Regex("\\((\\{.*?\\})\\)", RegexOption.DOT_MULTILINE)
+    private val JSONP_GREEDY = Regex("\\((\\{.*\\})\\)", RegexOption.DOT_MATCHES_ALL)
+    private val JSONP_LAZY = Regex("\\((\\{.*?\\})\\)", RegexOption.DOT_MATCHES_ALL)
 
     // ---------------------------------------------------------------- HTTP
 
