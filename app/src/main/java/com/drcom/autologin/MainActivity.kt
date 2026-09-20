@@ -9,6 +9,7 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
+import android.util.Log
 import android.view.View
 import android.widget.ArrayAdapter
 import android.widget.ScrollView
@@ -41,6 +42,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        Log.d(TAG, "MainActivity.onCreate 启动 (v1.6.1-debug)")
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
@@ -49,27 +51,42 @@ class MainActivity : AppCompatActivity() {
         val cfg = Prefs.load(this)
         loadConfigToUi(cfg)
         keepAliveRunning = cfg.keepAlive
+        Log.i(TAG, "MainActivity 加载配置: host=${cfg.host} 账号=${cfg.account} autoCheck=${cfg.autoCheck} keepAlive=${cfg.keepAlive}")
 
-        binding.btnSave.setOnClickListener { applyConfig(true) }
+        binding.btnSave.setOnClickListener {
+            Log.i(TAG, "MainActivity: 用户点 保存配置")
+            applyConfig(true)
+        }
 
         binding.btnLoginNow.setOnClickListener {
+            Log.i(TAG, "MainActivity: 用户点 立即登录")
             if (applyConfig(false)) {
                 startPortalLogin()
             }
         }
 
-        binding.btnBattery.setOnClickListener { openBatterySettings() }
+        binding.btnBattery.setOnClickListener {
+            Log.i(TAG, "MainActivity: 用户点 电池优化设置")
+            openBatterySettings()
+        }
 
-        binding.btnOverlay.setOnClickListener { openOverlaySettings() }
+        binding.btnOverlay.setOnClickListener {
+            Log.i(TAG, "MainActivity: 用户点 悬浮窗权限设置")
+            openOverlaySettings()
+        }
 
         binding.btnClearLog.setOnClickListener {
+            Log.i(TAG, "MainActivity: 用户点 清空日志")
             LogStore.clear(this)
             lastLogText = null
             refreshLog(true)
             toast(getString(R.string.toast_log_cleared))
         }
 
-        binding.btnRefreshLog.setOnClickListener { refreshLog(true) }
+        binding.btnRefreshLog.setOnClickListener {
+            Log.d(TAG, "MainActivity: 用户点 刷新日志")
+            refreshLog(true)
+        }
 
         requestBasePermissions()
 
@@ -78,6 +95,7 @@ class MainActivity : AppCompatActivity() {
 
         refreshStatus()
         refreshLog(true)
+        Log.d(TAG, "MainActivity.onCreate 完成")
     }
 
     override fun onResume() {
@@ -352,5 +370,7 @@ class MainActivity : AppCompatActivity() {
         const val REFRESH_INTERVAL_MS = 2000L
         const val REQ_BASE = 1001
         const val REQ_LOCATION = 1002
+        /** 统一 logcat tag：`adb logcat -s DrcomAutoLogin:V`。 */
+        const val TAG = "DrcomAutoLogin"
     }
 }

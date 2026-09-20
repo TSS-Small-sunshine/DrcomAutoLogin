@@ -4,9 +4,11 @@ import android.annotation.SuppressLint
 import android.app.Activity
 import android.content.Context
 import android.content.Intent
+import android.graphics.Bitmap
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.util.Log
 import android.webkit.CookieManager
 import android.webkit.WebView
 import android.webkit.WebViewClient
@@ -53,6 +55,7 @@ class PortalLoginActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        Log.d(TAG, "PortalLoginActivity.onCreate 启动 (v1.6.1-debug)")
 
         val extras = intent
         val cfg = Prefs.load(this)
@@ -67,9 +70,11 @@ class PortalLoginActivity : Activity() {
         acName = extras.getStringExtra(EXTRA_AC_NAME)?.trim().orEmpty()
 
         LogStore.log(this, "INFO", "WebView 启动网页版登录: 门户=$host:$port 账号=$account$suffix")
+        Log.i(TAG, "PortalLoginActivity 收到启动参数: 门户=$host:$port 账号=$account$suffix userIp=${userIp.ifEmpty { "(空)" }} userMac=${userMac.ifEmpty { "(空)" }} acIp=${acIp.ifEmpty { "(空)" }} acName=${acName.ifEmpty { "(空)" }}")
 
         if (account.isEmpty() || password.isEmpty()) {
             LogStore.log(this, "ERROR", "WebView 账号或密码为空，无法网页版登录")
+            Log.e(TAG, "PortalLoginActivity 账号或密码为空，提前结束")
             Prefs.saveStatus(
                 this,
                 networkReachable = true,
@@ -82,13 +87,16 @@ class PortalLoginActivity : Activity() {
 
         if (userIp.isEmpty() || userMac.isEmpty() || acIp.isEmpty() || acName.isEmpty()) {
             LogStore.log(this, "INFO", "WebView 网关参数不完整，后台探测中…")
+            Log.w(TAG, "PortalLoginActivity 网关参数不完整，后台探测中…")
             resolveParamsInBackground()
         } else {
+            Log.d(TAG, "PortalLoginActivity 网关参数已就绪，直接 startWebView")
             startWebView()
         }
     }
 
     override fun onDestroy() {
+        Log.d(TAG, "PortalLoginActivity.onDestroy done=$done verifying=$verifying")
         handler.removeCallbacksAndMessages(null)
         try {
             web?.stopLoading()
@@ -106,6 +114,7 @@ class PortalLoginActivity : Activity() {
      *  wlanuserip / mac / wlanacip / wlancname，再退回 chkstatus + 本机网卡。
      *  网络请求绝不能在主线程做（会抛 NetworkOnMainThreadException）。 */
     private fun resolveParamsInBackground() {
+        Log.d(TAG, "PortalLoginActivity.resolveParamsInBackground 启动后台探测线程")
         val ctx = applicationContext
         val targetHost = host
         Thread {
@@ -114,6 +123,7 @@ class PortalLoginActivity : Activity() {
                     LoginEngine.discoverPortalParams(ctx)
                 } catch (t: Throwable) {
                     LogStore.log(ctx, "WARN", "WebView 门户参数探测失败: " + (t.message ?: t.javaClass.simpleName))
+                    Log.w(TAG, "PortalLoginActivity.discoverPortalParams 失败: " + (t.message ?: t.javaClass.simpleName))
                     null
                 }
                 if (portal != null) {
@@ -132,8 +142,10 @@ class PortalLoginActivity : Activity() {
                     "WebView 网关参数: ip=${userIp.ifEmpty { "(空)" }} mac=${userMac.ifEmpty { "(空)" }} " +
                         "acIp=${acIp.ifEmpty { "(空)" }} acName=${acName.ifEmpty { "(空)" }}"
                 )
+                Log.i(TAG, "PortalLoginActivity 网关参数补齐: ip=$userIp mac=$userMac acIp=$acIp acName=$acName")
             } catch (t: Throwable) {
                 LogStore.log(ctx, "WARN", "WebView 网关参数补齐异常: " + (t.message ?: t.javaClass.simpleName))
+                Log.w(TAG, "PortalLoginActivity 网关参数补齐异常: " + (t.message ?: t.javaClass.simpleName))
             }
             handler.post { if (!done && !isFinishing) startWebView() }
         }.start()
@@ -147,6 +159,7 @@ class PortalLoginActivity : Activity() {
         if (done || isFinishing) return
         val url = portalUrl()
         LogStore.log(this, "INFO", "WebView 门户 URL: $url")
+        Log.d(TAG, "PortalLoginActivity.startWebView URL: $url")
 
         CookieManager.getInstance().setAcceptCookie(true)
 
@@ -158,7 +171,12 @@ class PortalLoginActivity : Activity() {
         CookieManager.getInstance().setAcceptThirdPartyCookies(w, true)
 
         w.webViewClient = object : WebViewClient() {
+            override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
+                super.onPageStarted(view, url, favicon)
+                Log.d(TAG, "WebView.onPageStarted: ${url.orEmpty()}")
+            }
             override fun onPageFinished(view: WebView?, url: String?) {
+                Log.d(TAG, "WebView.onPageFinished: ${url.orEmpty()}")
                 onPageDone(url.orEmpty())
             }
         }
@@ -166,14 +184,17 @@ class PortalLoginActivity : Activity() {
         web = w
         // 透明 Activity：不设 GONE / 不设不可见，WebView 必须真正 attach 到窗口才会执行 JS
         setContentView(w)
+        Log.d(TAG, "PortalLoginActivity WebView 已 setContentView, 准备 loadUrl")
 
         w.loadUrl(url)
+        Log.d(TAG, "PortalLoginActivity WebView.loadUrl 已调用")
 
         // 兜底：页面一直加载不出来（或表单注入多次都失败）时，也要走校验并收尾，避免留下一个
         // 永远不结束的透明 Activity。
         handler.postDelayed({
             if (!done && !verifying) {
                 LogStore.log(this, "WARN", "WebView ${OVERALL_TIMEOUT_MS / 1000} 秒内未完成提交，转入在线校验")
+                Log.w(TAG, "PortalLoginActivity ${OVERALL_TIMEOUT_MS / 1000} 秒兜底超时，转入在线校验")
                 startVerify()
             }
         }, OVERALL_TIMEOUT_MS)
@@ -201,21 +222,28 @@ class PortalLoginActivity : Activity() {
         // 已经不在认证页（不含 a79.htm，或跳到了 3.htm 之类的结果页）→ 判为可能成功
         if (!url.contains(PORTAL_PAGE, true) || url.contains("3.htm", true)) {
             LogStore.log(this, "INFO", "WebView 已离开认证页，开始校验在线状态")
+            Log.d(TAG, "PortalLoginActivity 已离开认证页 (url=$url), 开始在线校验")
             startVerify()
             return
         }
 
         if (injectCount >= MAX_INJECT) {
             LogStore.log(this, "WARN", "WebView 注入已达 $MAX_INJECT 次仍停在认证页，等待兜底收尾")
+            Log.w(TAG, "PortalLoginActivity 注入已达上限 $MAX_INJECT 次，等待兜底收尾")
             return
         }
         injectCount++
         val view = web ?: return
         val js = buildJs()
+        Log.d(TAG, "PortalLoginActivity.evaluateJavascript 准备注入 (第 $injectCount 次)")
         view.evaluateJavascript(js) { result ->
             val text = result?.trim()?.removeSurrounding("\"") ?: ""
             LogStore.log(this, "INFO", "WebView 注入结果: $text（第 $injectCount 次）")
-            if (text.contains("CLICKED") || text.contains("SUBMITTED")) startVerify()
+            Log.i(TAG, "PortalLoginActivity.evaluateJavascript 返回: $text (第 $injectCount 次)")
+            if (text.contains("CLICKED") || text.contains("SUBMITTED")) {
+                Log.d(TAG, "PortalLoginActivity 注入已触发提交，进入在线校验")
+                startVerify()
+            }
         }
     }
 
@@ -254,17 +282,21 @@ class PortalLoginActivity : Activity() {
         if (verifying || done) return
         verifying = true
         LogStore.log(this, "INFO", "WebView 开始校验在线状态（最多 ${VERIFY_TIMEOUT_MS / 1000} 秒）")
+        Log.i(TAG, "PortalLoginActivity.startVerify 启动在线校验 (最多 ${VERIFY_TIMEOUT_MS / 1000} 秒)")
         val ctx = applicationContext
         val targetHost = host
         Thread {
             val deadline = System.currentTimeMillis() + VERIFY_TIMEOUT_MS
             var online = false
+            var attempts = 0
             while (System.currentTimeMillis() < deadline) {
+                attempts++
                 val r = try {
                     LoginEngine.probe(ctx, targetHost)
                 } catch (_: Throwable) {
                     null
                 }
+                Log.d(TAG, "PortalLoginActivity.probe 第 $attempts 次: ${r?.state} (${r?.detail})")
                 if (r != null && r.state == LoginEngine.ProbeState.ONLINE) {
                     online = true
                     break
@@ -276,6 +308,7 @@ class PortalLoginActivity : Activity() {
                 }
             }
             val ok = online
+            Log.i(TAG, "PortalLoginActivity.probe 结束: online=$ok attempts=$attempts")
             handler.post { finishWith(ok) }
         }.start()
     }
@@ -286,9 +319,11 @@ class PortalLoginActivity : Activity() {
         done = true
         if (online) {
             LogStore.log(this, "INFO", "WebView 登录成功")
+            Log.i(TAG, "PortalLoginActivity.finishWith: 登录成功, 准备 finish()")
             Prefs.saveStatus(this, networkReachable = true, online = true, lastError = null)
         } else {
             LogStore.log(this, "ERROR", "WebView 登录超时未生效")
+            Log.e(TAG, "PortalLoginActivity.finishWith: 登录超时未生效, 准备 finish()")
             Prefs.saveStatus(this, networkReachable = true, online = false, lastError = "WebView 登录超时")
         }
         finish()
@@ -301,6 +336,9 @@ class PortalLoginActivity : Activity() {
         private const val VERIFY_INTERVAL_MS = 2000L
         private const val VERIFY_TIMEOUT_MS = 30000L
         private const val OVERALL_TIMEOUT_MS = 60000L
+
+        /** 统一 logcat tag：`adb logcat -s DrcomAutoLogin:V`。 */
+        private const val TAG = "DrcomAutoLogin"
 
         const val EXTRA_HOST = "host"
         const val EXTRA_PORT = "port"

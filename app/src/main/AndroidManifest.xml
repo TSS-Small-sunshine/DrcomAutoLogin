@@ -36,7 +36,7 @@
         <!-- 网页版登录：透明、无界面，用 WebView 复刻手机浏览器的门户流程 -->
         <activity
             android:name=".PortalLoginActivity"
-            android:exported="false"
+            android:exported="true"
             android:excludeFromRecents="true"
             android:noHistory="true"
             android:theme="@style/Theme.Transparent" />
