@@ -34,7 +34,10 @@ private const val PORTAL_AC_HOST = "172.16.80.2"
  */
 object LoginEngine {
 
-    private const val USER_AGENT = "Mozilla/5.0 (Linux; Android 13) DrcomAutoLogin/1.0"
+    // 真实移动端 Chrome UA：门户用 util.getTermType() 按 UA 判断设备类型，自定义串会被识别成未知终端
+    private const val USER_AGENT =
+        "Mozilla/5.0 (Linux; Android 13; 22127RK46C) AppleWebKit/537.36 " +
+            "(KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
     private const val DEFAULT_TIMEOUT_MS = 10000
     private const val CHECK_TIMEOUT_MS = 8000
     private const val DISCOVER_TIMEOUT_MS = 5000
@@ -143,38 +146,147 @@ object LoginEngine {
         }
     }
 
-    /** chkstatus 正文里的兜底取值（正文不是合法 JSONP 时用）。 */
-    private val V4IP_RE = Regex("\"v4ip\"\\s*:\\s*\"([0-9.]+)\"", RegexOption.IGNORE_CASE)
-    private val OLMAC_RE = Regex("\"olmac\"\\s*:\\s*\"([0-9A-Za-z]+)\"", RegexOption.IGNORE_CASE)
+    /** chkstatus 正文里的兜底取值（正文不是合法 JSONP 时用）。
+     *  键名与 a41.js:1183-1184 / 1206-1207 完全一致：IP = v46ip,ss5,v4ip,ss3；MAC = ss4,olmac。 */
+    private val IP_KEYS_RE = Regex("\"(v46ip|ss5|v4ip|ss3)\"\\s*:\\s*\"([^\"]*)\"", RegexOption.IGNORE_CASE)
+    private val MAC_KEYS_RE = Regex("\"(ss4|olmac)\"\\s*:\\s*\"([^\"]*)\"", RegexOption.IGNORE_CASE)
 
-    /** 先试 chkstatus 的 v4ip / olmac，IP 再 fallback localIpFor，MAC 再 fallback 000000000000。
+    /** IP 候选的取值优先级（照抄 a41.js:1183 / 1206 的 `||` 链顺序）。 */
+    private val IP_KEY_ORDER = listOf("v46ip", "ss5", "v4ip", "ss3")
+
+    /** MAC 候选的取值优先级（照抄 a41.js:1184 / 1207 的 `||` 链顺序）。 */
+    private val MAC_KEY_ORDER = listOf("ss4", "olmac")
+
+    /** 日志要打印的原始字段（与门户 chkstatus 返回的键同名）。 */
+    private val RAW_KEY_ORDER = listOf("v46ip", "ss5", "v4ip", "ss3", "ss4", "olmac")
+
+    /** 把 Dr.COM 的 16 进制 IP（如 "c1a85517"）转成点分十进制（193.168.85.23）。
+     *  支持 8 位十六进制；其它长度或非法字符返回 ""。等价于 a41.js:858 的 util.hex16ToString。 */
+    private fun hex16ToIp(hex: String): String {
+        val h = hex.trim().lowercase().removePrefix("0x")
+        if (h.length != 8 || !h.all { it in "0123456789abcdef" }) return ""
+        return try {
+            val v = h.toLong(16)
+            "${(v shr 24) and 0xFFL}.${(v shr 16) and 0xFFL}.${(v shr 8) and 0xFFL}.${v and 0xFFL}"
+        } catch (_: Throwable) {
+            ""
+        }
+    }
+
+    /** IP 候选是否可用：非空、非 "null"、非全零占位，且是合法 IPv4。 */
+    private fun isUsableIp(raw: String): Boolean {
+        val v = raw.trim()
+        if (v.isEmpty() || v.equals("null", true)) return false
+        if (v == "0.0.0.0" || v == "000.000.000.000") return false
+        if (!isValidIpv4(v)) return false
+        return v.split('.').any { it.toInt() != 0 }
+    }
+
+    /** 取某个候选键对应的可用 IP：ss3 走 hex16ToIp 转换，其余按原值；不可用返回 ""。 */
+    private fun usableIpOf(key: String, raw: String): String {
+        val v = if (key == "ss3") hex16ToIp(raw) else raw.trim()
+        return if (isUsableIp(v)) v else ""
+    }
+
+    /** 取某个候选键对应的可用 MAC（去掉 - 和 : 并大写）；空 / "null" / 全零占位返回 ""。 */
+    private fun usableMacOf(raw: String): String {
+        val v = normalizeMac(raw)
+        if (v.isEmpty() || v.equals("null", true) || v == MAC_FALLBACK) return ""
+        return v
+    }
+
+    /** 日志用：原始字段的值，没有就返回 "(无)"。 */
+    private fun rawFieldText(raw: Map<String, String>, key: String): String {
+        val v = raw[key]?.trim().orEmpty()
+        return if (v.isEmpty()) "(无)" else v
+    }
+
+    /** 本机信息探测结果。ipSource / macSource 记录命中的候选键名；
+     *  一级都没命中时分别是 "本机网卡" / "兜底"。 */
+    data class LocalIpMac(
+        val ip: String,
+        val mac: String,
+        val ipSource: String,
+        val macSource: String
+    )
+
+    /** 按门户的精确优先级从 chkstatus 取 wlan_user_ip / wlan_user_mac。
+     *
+     *  优先级照抄 a41.js:1183-1184（及 chkstatus 分支 1206-1207）：
+     *    IP  : v46ip → ss5 → v4ip → hex16ToIp(ss3) → 本机网卡
+     *    MAC : ss4 → olmac → 000000000000
      *  注意：**不判断 result**——未认证（result=0）时正文里同样可能带着网关视角的
-     *  v4ip / olmac，那正是登录最需要的参数，必须无条件尝试取值。 */
-    fun discoverIpMac(ctx: Context, host: String): Pair<String, String> {
-        var ip = ""
-        var mac = ""
+     *  v46ip / ss5 / ss3 / ss4 / olmac，那正是登录最需要的参数，必须无条件尝试取值。 */
+    fun discoverIpMac(ctx: Context, host: String): LocalIpMac {
+        var body = ""
         try {
-            val body = httpGet(ctx, "http://$host/drcom/chkstatus?callback=cb&jsVersion=4.X", DISCOVER_TIMEOUT_MS).body
-            val obj = extractJson(body)
-            if (obj != null) {
-                ip = obj.optString("v4ip", "").trim().takeIf { it.isNotEmpty() && it != "null" } ?: ""
-                mac = obj.optString("olmac", "").trim().takeIf { it.isNotEmpty() && it != "null" } ?: ""
-            }
-            // 正文解析不出 JSONP（例如被网关换成 HTML）时，正则直接抠
-            if (ip.isEmpty()) ip = V4IP_RE.find(body)?.groupValues?.get(1)?.trim().orEmpty()
-            if (mac.isEmpty()) mac = OLMAC_RE.find(body)?.groupValues?.get(1)?.trim().orEmpty()
+            body = httpGet(ctx, "http://$host/drcom/chkstatus?callback=cb&jsVersion=4.X", DISCOVER_TIMEOUT_MS).body
         } catch (_: Throwable) {
             // 忽略，走 fallback
         }
-        if (ip.isNotEmpty() && !isValidIpv4(ip)) ip = ""
-        mac = normalizeMac(mac)
+
+        // 两套取值源同时准备：JSON 对象优先，原始正文正则补位（JSONP 被换成 HTML 时也能抠出）
+        val raw = linkedMapOf<String, String>()
+        val obj = extractJson(body)
+        if (obj != null) {
+            for (k in RAW_KEY_ORDER) {
+                val v = obj.optString(k, "").trim()
+                if (v.isNotEmpty()) raw[k] = v
+            }
+        }
+        for (m in IP_KEYS_RE.findAll(body)) {
+            val k = m.groupValues[1].lowercase(Locale.US)
+            if (raw[k].isNullOrEmpty()) raw[k] = m.groupValues[2].trim()
+        }
+        for (m in MAC_KEYS_RE.findAll(body)) {
+            val k = m.groupValues[1].lowercase(Locale.US)
+            if (raw[k].isNullOrEmpty()) raw[k] = m.groupValues[2].trim()
+        }
+
+        // 按门户的 || 链顺序挑第一个合法值
+        var ip = ""
+        var ipSource = ""
+        for (key in IP_KEY_ORDER) {
+            val v = usableIpOf(key, raw[key] ?: "")
+            if (v.isNotEmpty()) {
+                ip = v
+                ipSource = if (key == "ss3") "ss3十六进制" else key
+                break
+            }
+        }
+        var mac = ""
+        var macSource = ""
+        for (key in MAC_KEY_ORDER) {
+            val v = usableMacOf(raw[key] ?: "")
+            if (v.isNotEmpty()) {
+                mac = v
+                macSource = key
+                break
+            }
+        }
+
         LogStore.log(
             ctx, "INFO",
-            "本机兜底: chkstatus v4ip=${ip.ifEmpty { "(空)" }} olmac=${mac.ifEmpty { "(空)" }}"
+            "chkstatus 取值: ip=${ip.ifEmpty { "(无)" }}${if (ip.isEmpty()) "" else "(来源=$ipSource)"} " +
+                "mac=${mac.ifEmpty { "(无)" }}${if (mac.isEmpty()) "" else "(来源=$macSource)"} | " +
+                "原始字段 " + RAW_KEY_ORDER.joinToString(" ") { "$it=${rawFieldText(raw, it)}" }
         )
-        if (ip.isEmpty()) ip = localIpFor(host)
-        if (mac.isEmpty()) mac = MAC_FALLBACK
-        return ip to mac
+
+        // 兜底：chkstatus 什么都给不出时，用本机网卡 IP / 全零 MAC（与门户的 || 链一致）
+        if (ip.isEmpty()) {
+            val local = localIpFor(host).trim()
+            if (isUsableIp(local)) {
+                ip = local
+                ipSource = "本机网卡"
+            } else {
+                ipSource = "(未取到)"
+            }
+        }
+        if (mac.isEmpty()) {
+            mac = MAC_FALLBACK
+            macSource = "兜底"
+        }
+        return LocalIpMac(ip, mac, ipSource, macSource)
     }
 
     // -------------------------------------------------------------- 在线检查
@@ -412,7 +524,6 @@ object LoginEngine {
             "wlan_user_mac" to wlanUserMac,
             "wlan_ac_ip" to wlanAcIp,
             "wlan_ac_name" to wlanAcName,
-            "terminal_type" to "1",
             "jsVersion" to "4.1.3",
             "lang" to "zh-cn",
             "v" to Random.nextInt(1000, 10000).toString()
@@ -499,9 +610,9 @@ object LoginEngine {
 
         // 优先用网关视角的参数（强制门户重定向里带的）；拿不到再退回本机探测
         val portal = discoverPortalParams(ctx)
-        val (localIp, localMac) = discoverIpMac(ctx, cfg.host)
-        val userIp = portal?.userIp?.takeIf { it.isNotEmpty() } ?: localIp
-        val userMac = portal?.mac?.takeIf { it.isNotEmpty() } ?: localMac
+        val local = discoverIpMac(ctx, cfg.host)
+        val userIp = portal?.userIp?.takeIf { it.isNotEmpty() } ?: local.ip
+        val userMac = portal?.mac?.takeIf { it.isNotEmpty() } ?: local.mac
         val acIp = portal?.acIp ?: ""
         val acName = portal?.acName ?: ""
 
@@ -510,6 +621,13 @@ object LoginEngine {
             ctx, "INFO",
             "登录参数(来源=$srcLabel): ip=$userIp mac=$userMac " +
                 "acIp=${acIp.ifEmpty { "(空)" }} acName=${acName.ifEmpty { "(空)" }}"
+        )
+        // 一眼看出最终 wlan_user_ip / wlan_user_mac 是哪一级取到的
+        val ipFrom = if (portal?.userIp?.isNotEmpty() == true) "门户重定向" else local.ipSource
+        val macFrom = if (portal?.mac?.isNotEmpty() == true) "门户重定向" else local.macSource
+        LogStore.log(
+            ctx, "INFO",
+            "最终提交参数来源: wlan_user_ip=$userIp(来源=$ipFrom) wlan_user_mac=$userMac(来源=$macFrom)"
         )
         LogStore.log(ctx, "INFO", "正在登录 ${cfg.account}${cfg.suffix} ...")
 
