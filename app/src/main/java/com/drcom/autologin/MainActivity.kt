@@ -105,6 +105,14 @@ class MainActivity : AppCompatActivity() {
         val intervalAdapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, intervalLabels)
         intervalAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
         binding.spInterval.adapter = intervalAdapter
+
+        val macTypeAdapter = ArrayAdapter(
+            this,
+            android.R.layout.simple_spinner_item,
+            Config.MAC_TYPE_LABELS
+        )
+        macTypeAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+        binding.spMacType.adapter = macTypeAdapter
     }
 
     // ------------------------------------------------------------------ UI 读写
@@ -124,6 +132,11 @@ class MainActivity : AppCompatActivity() {
         val intervalIndex = Config.INTERVAL_OPTIONS.indexOf(cfg.intervalMinutes)
         binding.spInterval.setSelection(
             if (intervalIndex >= 0) intervalIndex else Config.INTERVAL_OPTIONS.indexOf(Config.DEFAULT.intervalMinutes)
+        )
+
+        val macTypeIndex = Config.MAC_TYPE_VALUES.indexOf(cfg.macType)
+        binding.spMacType.setSelection(
+            if (macTypeIndex >= 0) macTypeIndex else Config.MAC_TYPE_VALUES.indexOf(Config.DEFAULT.macType)
         )
     }
 
@@ -150,7 +163,9 @@ class MainActivity : AppCompatActivity() {
             intervalMinutes = Config.INTERVAL_OPTIONS
                 .getOrElse(binding.spInterval.selectedItemPosition) { Config.DEFAULT.intervalMinutes },
             ssidFilter = binding.etSsidFilter.text.toString().trim(),
-            keepAlive = binding.swKeepAlive.isChecked
+            keepAlive = binding.swKeepAlive.isChecked,
+            macType = Config.MAC_TYPE_VALUES
+                .getOrElse(binding.spMacType.selectedItemPosition) { Config.DEFAULT.macType }
         )
         Prefs.save(this, cfg)
 

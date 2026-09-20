@@ -507,6 +507,16 @@ object LoginEngine {
 
     // ---------------------------------------------------------------- 登录
 
+    /** 终端类型的日志文本：如 `2(手机)`；0 表示不带该参数，打印 `不发送`。
+     *  标签取自 Config.MAC_TYPE_LABELS，避免两处硬编码。 */
+    private fun macTypeText(macType: Int): String {
+        if (macType <= 0) return "不发送"
+        val i = Config.MAC_TYPE_VALUES.indexOf(macType)
+        if (i < 0) return macType.toString()
+        val label = Config.MAC_TYPE_LABELS[i].removeSuffix(" (${Config.MAC_TYPE_VALUES[i]})")
+        return "$macType($label)"
+    }
+
     /** 返回 (是否成功, 服务端 msg 或本地诊断信息)。协议参数与 Windows 版完全一致，不要改。 */
     fun login(
         ctx: Context, cfg: Config,
@@ -528,11 +538,17 @@ object LoginEngine {
             "lang" to "zh-cn",
             "v" to Random.nextInt(1000, 10000).toString()
         )
+        // 终端类型（门户 a41.js:423 的 mac_type 字段名）：AC 据此归类终端并套用该类型的在线数上限。
+        // 0 = 不带该参数（保持旧行为）。放在 wlan_ac_name 之后，其余参数不动。
+        if (cfg.macType > 0) {
+            params["mac_type"] = cfg.macType.toString()
+        }
         val query = params.entries.joinToString("&") { enc(it.key) + "=" + enc(it.value) }
         val url = "http://" + cfg.host + ":" + cfg.port + "/eportal/portal/login?" + query
         LogStore.log(
             ctx, "INFO",
-            "登录请求: ${cfg.host}:${cfg.port}（网络=${networkLabel(ctx)}，本机IP=$wlanUserIp，MAC=$wlanUserMac）"
+            "登录请求: ${cfg.host}:${cfg.port}（网络=${networkLabel(ctx)}，本机IP=$wlanUserIp，MAC=$wlanUserMac，" +
+                "终端类型=${macTypeText(cfg.macType)}）"
         )
         val res = try {
             httpGet(ctx, url, LOGIN_TIMEOUT_MS)
@@ -638,6 +654,9 @@ object LoginEngine {
         } else {
             LogStore.log(ctx, "ERROR", "登录失败: $msg")
             Prefs.saveStatus(ctx, networkReachable = true, online = false, lastError = msg)
+            if (msg.contains("终端")) {
+                LogStore.log(ctx, "WARN", "提示：可能是终端类型不被接受，请在配置里换一个「终端类型」再试")
+            }
         }
         return ok
     }

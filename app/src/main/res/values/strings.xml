@@ -37,6 +37,8 @@
     <string name="hint_ssid_filter">SSID，逗号分隔；留空=不限（需要定位权限）</string>
     <string name="label_keep_alive">常驻通知保活</string>
     <string name="hint_keep_alive">国产 ROM 建议开启，避免后台被系统清理</string>
+    <string name="label_mac_type">终端类型</string>
+    <string name="hint_mac_type">若提示「PC终端在线数已上限」，换一个终端类型再试（手机/平板/PC/不发送）</string>
 
     <string name="btn_save">保存配置</string>
     <string name="btn_login_now">立即登录</string>

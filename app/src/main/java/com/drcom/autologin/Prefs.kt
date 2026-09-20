@@ -24,6 +24,7 @@ object Prefs {
     private const val KEY_INTERVAL = "interval_minutes"
     private const val KEY_SSID_FILTER = "ssid_filter"
     private const val KEY_KEEP_ALIVE = "keep_alive"
+    private const val KEY_MAC_TYPE = "mac_type"
 
     private const val KEY_STATUS_NETWORK = "status_network"
     private const val KEY_STATUS_ONLINE = "status_online"
@@ -38,6 +39,7 @@ object Prefs {
         val d = Config.DEFAULT
         val port = p.getInt(KEY_PORT, d.port)
         val interval = p.getInt(KEY_INTERVAL, d.intervalMinutes)
+        val macType = p.getInt(KEY_MAC_TYPE, d.macType)
         return Config(
             host = p.getString(KEY_HOST, d.host)?.takeIf { it.isNotBlank() } ?: d.host,
             port = if (port in 1..65535) port else d.port,
@@ -47,7 +49,8 @@ object Prefs {
             autoCheck = p.getBoolean(KEY_AUTO_CHECK, d.autoCheck),
             intervalMinutes = if (interval > 0) interval else d.intervalMinutes,
             ssidFilter = p.getString(KEY_SSID_FILTER, d.ssidFilter) ?: d.ssidFilter,
-            keepAlive = p.getBoolean(KEY_KEEP_ALIVE, d.keepAlive)
+            keepAlive = p.getBoolean(KEY_KEEP_ALIVE, d.keepAlive),
+            macType = if (macType in 0..3) macType else d.macType
         )
     }
 
@@ -62,6 +65,7 @@ object Prefs {
             .putInt(KEY_INTERVAL, cfg.intervalMinutes)
             .putString(KEY_SSID_FILTER, cfg.ssidFilter)
             .putBoolean(KEY_KEEP_ALIVE, cfg.keepAlive)
+            .putInt(KEY_MAC_TYPE, cfg.macType)
             .apply()
     }
 

@@ -255,6 +255,27 @@
                 android:text="@string/hint_keep_alive"
                 android:textColor="@color/text_hint"
                 android:textSize="12sp" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:text="@string/label_mac_type"
+                android:textColor="@color/text_secondary"
+                android:textSize="13sp" />
+
+            <Spinner
+                android:id="@+id/spMacType"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:spinnerMode="dialog" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="@string/hint_mac_type"
+                android:textColor="@color/text_hint"
+                android:textSize="12sp" />
         </LinearLayout>
 
         <!-- ==================== 按钮 ==================== -->
