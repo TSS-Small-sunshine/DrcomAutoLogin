@@ -64,9 +64,9 @@ runs-on: ubuntu-latest
 | `Set up Gradle` → `gradle/actions/setup-gradle@v4`（8.9） | 装 Gradle 8.9 并开启依赖缓存 |
 | `Decode signing keystore` | 把 Secrets 里的密钥库（base64）解码成临时文件，供签名使用 |
 | `Build unsigned release APK` | **真正开始编译**：`gradle assembleRelease --no-daemon --stacktrace`，产出**未签名**包 |
-| `Sign APK with v1 + v2 + v3` | 先用 `zipalign` 对齐，再由 `apksigner` 显式以 v1 + v2 + v3 签名，输出 `DrcomAutoLogin-debug.apk` |
+| `Sign APK with v1 + v2 + v3` | 先用 `zipalign` 对齐，再由 `apksigner` 显式以 v1 + v2 + v3 签名，输出 `DrcomAutoLogin-v<版本号>-debug.apk`（版本号由 `app/build.gradle.kts` 的 `versionName` 解析得到，如 `DrcomAutoLogin-v1.1-debug.apk`） |
 | `Verify APK (signature + manifest)` | 打印 APK 的签名方案（`apksigner verify`）、检查 v1 签名文件是否齐全、打印包信息（`aapt2 dump badging`），确认产物正确 |
-| `Upload APK artifact` | 把签名后的 `DrcomAutoLogin-debug.apk` 上传为 artifact |
+| `Upload APK artifact` | 把签名后的 `DrcomAutoLogin-v<版本号>-debug.apk` 上传为 artifact |
 | `Publish Release (tag debug)` | 用 `gh release` 删除并重建 tag 为 `debug` 的 Release，附件即该 APK |
 
 > `--no-daemon`：编译机只用一次，不需要常驻进程，关掉更快更省内存。
@@ -79,13 +79,13 @@ runs-on: ubuntu-latest
   uses: actions/upload-artifact@v4
   with:
     name: DrcomAutoLogin-APK
-    path: app/build/outputs/apk/release/DrcomAutoLogin-debug.apk
+    path: app/build/outputs/apk/release/DrcomAutoLogin-v*-debug.apk
     if-no-files-found: error
 ```
 
-编译成功后，把 `app/build/outputs/apk/release/DrcomAutoLogin-debug.apk` 打包成一个名为 **`DrcomAutoLogin-APK`** 的 artifact（可以理解为「云端产物压缩包」）供你下载。
+编译成功后，把 `app/build/outputs/apk/release/DrcomAutoLogin-v<版本号>-debug.apk`（`path` 里写成 `DrcomAutoLogin-v*-debug.apk` 通配，文件名带 `versionName`）打包成一个名为 **`DrcomAutoLogin-APK`** 的 artifact（可以理解为「云端产物压缩包」）供你下载。
 
-最后还有一步 `Publish Release (tag debug)`：它用 `gh release` 把同一个 `DrcomAutoLogin-debug.apk` 挂到 tag 为 **`debug`** 的 Release 上（先删旧 Release 再重建，所以下载链接固定不变），并带上 `--prerelease` 标记。也就是说 **Actions artifact 里解压出的文件，和 Releases 里的附件是同一个文件、同名同内容**。
+最后还有一步 `Publish Release (tag debug)`：它用 `gh release` 把同一个 `DrcomAutoLogin-v<版本号>-debug.apk` 挂到 tag 为 **`debug`** 的 Release 上（先删旧 Release 再重建，所以 Release 页面地址固定不变；但**附件文件名会随版本变化**），并带上 `--prerelease` 标记。也就是说 **Actions artifact 里解压出的文件，和 Releases 里的附件是同一个文件、同名同内容**。
 
 `if-no-files-found: error` 的意思是：**如果没找到 apk 就直接报错**。这是故意的——防止编译其实失败了、却悄悄给你一个空的下载包。
 
@@ -139,7 +139,7 @@ Set up job
 
 1. 打开 <https://github.com/TSS-Small-sunshine/DrcomAutoLogin/releases>。
 2. 找到标签为 **`debug`** 的 Release（标题是「Debug 构建（自动更新）」）。
-3. 在 `Assets` 区域下载附件 **`DrcomAutoLogin-debug.apk`**。
+3. 在 `Assets` 区域下载附件 **`DrcomAutoLogin-v<版本号>-debug.apk`**（如 `DrcomAutoLogin-v1.1-debug.apk`）。
 4. 把 APK 传到手机安装（需按提示允许「安装未知应用」）。
 
 关于这个 Release：
@@ -147,8 +147,8 @@ Set up job
 | 项 | 值 |
 | --- | --- |
 | tag | **`debug`**（固定不变） |
-| 附件名 | **`DrcomAutoLogin-debug.apk`** |
-| 更新方式 | 每次向 `main` / `master` 推送代码后，CI 自动删除并重建该 Release，**下载链接始终不变** |
+| 附件名 | **`DrcomAutoLogin-v<版本号>-debug.apk`**（带版本号，如 `DrcomAutoLogin-v1.1-debug.apk`）——**看版本号就知道是不是最新** |
+| 更新方式 | 每次向 `main` / `master` 推送代码后，CI 自动删除并重建该 Release，**Release 页面地址（`/releases/tag/debug`）始终不变**，但**附件文件名会随版本变化** |
 | 是否需要登录 GitHub | **不需要**，链接可直接分享给同学 |
 
 > 注意：这里说的「Debug 版」指的是「给同学用的临时分发版本」，**签名仍然是 release 正式签名**（v1 + v2 + v3），不是 Android 默认的 debug 签名。
@@ -161,19 +161,19 @@ Set up job
 2. 拉到页面**最底部**，找到 **`Artifacts`** 区块。
 3. 点 **`DrcomAutoLogin-APK`**。
 4. 浏览器会下载一个 **zip 压缩包**。
-5. 解压这个 zip，得到 **`DrcomAutoLogin-debug.apk`** ——这就是能装到手机上的安装包。
+5. 解压这个 zip，得到 **`DrcomAutoLogin-v<版本号>-debug.apk`** ——这就是能装到手机上的安装包。
 
 > **artifact 里的文件名和 Releases 里的一样吗？**
-> 一样。`Upload APK artifact` 和 `Publish Release (tag debug)` 用的是同一个文件 `DrcomAutoLogin-debug.apk`：Actions 的 artifact 里解压出来是它，Releases 里 `debug` 那个 Release 的附件也是它，**同名、同内容**（可以互相校验 `sha256`）。所以从哪边下载都行，装出来的 App 完全一致。
+> 一样。`Upload APK artifact` 和 `Publish Release (tag debug)` 用的是同一个文件 `DrcomAutoLogin-v<版本号>-debug.apk`：Actions 的 artifact 里解压出来是它，Releases 里 `debug` 那个 Release 的附件也是它，**同名、同内容**（可以互相校验 `sha256`）。所以从哪边下载都行，装出来的 App 完全一致。
 
 > **这是正式签名的包吗？**
 > 是。CI 产出的是 **release 正式签名**包，同时启用了 **v1（JAR）+ v2 + v3** 三种签名方案。第三方来源侧载安装时 v1 签名是兼容性兜底——只签 v2 的包在部分国产 ROM 上会被包解析器拒绝，报「解析软件包时出现问题 / packageInfo is null」。
 >
 > **v1 签名是怎么保证的？**
-> 因为 **AGP 在 `minSdk >= 24` 时会忽略 `enableV1Signing`**（AGP 认为 v1 冗余），所以 CI 不依赖 Gradle 的签名配置：先由 `gradle assembleRelease` 产出**未签名**包 → `zipalign` 对齐 → 再由 `apksigner` 显式以 `--v1-signing-enabled true --v2-signing-enabled true --v3-signing-enabled true` 签名，产物即为 `DrcomAutoLogin-debug.apk`。
+> 因为 **AGP 在 `minSdk >= 24` 时会忽略 `enableV1Signing`**（AGP 认为 v1 冗余），所以 CI 不依赖 Gradle 的签名配置：先由 `gradle assembleRelease` 产出**未签名**包 → `zipalign` 对齐 → 再由 `apksigner` 显式以 `--v1-signing-enabled true --v2-signing-enabled true --v3-signing-enabled true` 签名，产物即为 `DrcomAutoLogin-v<版本号>-debug.apk`。
 >
-> **为什么文件名是 `DrcomAutoLogin-debug.apk` 而不是中文名？**
-> 这个名字是 CI 在 **`Sign APK with v1 + v2 + v3`** 这一步用 `apksigner --out` 显式指定的（Gradle 在 `app/build/outputs/apk/release/` 下产出的 `*-unsigned.apk` 只是签名前的中间产物，不会上传）。安装到手机后显示的名称才是「Dr.COM 校园网自动登录」；这里的 `debug` 指的是「给同学用的临时分发版」，签名本身仍是 release 正式签名。
+> **为什么文件名是 `DrcomAutoLogin-v<版本号>-debug.apk` 而不是中文名？**
+> 这个名字是 CI 在 **`Sign APK with v1 + v2 + v3`** 这一步用 `apksigner --out` 显式指定的，其中 `<版本号>` 从 `app/build.gradle.kts` 的 `versionName` 解析而来（Gradle 在 `app/build/outputs/apk/release/` 下产出的 `*-unsigned.apk` 只是签名前的中间产物，不会上传）。**带版本号是为了让你在下载页一眼分辨新旧包**：Release 页面地址不变，但每次重建附件名都会更新成当前的 `versionName`。安装到手机后显示的名称才是「Dr.COM 校园网自动登录」；这里的 `debug` 指的是「给同学用的临时分发版」，签名本身仍是 release 正式签名。
 
 ### 怎么确认这个 APK 签名正常
 
@@ -235,7 +235,7 @@ GitHub 的 artifact 默认**保留 90 天**，过期后链接失效。解决办�
 
    （`ubuntu-latest` 镜像本身就预装了 Android SDK，所以正常情况不需要这一步。）
 
-### 情况 5：`No files were found with the provided path: app/build/outputs/apk/release/DrcomAutoLogin-debug.apk`
+### 情况 5：`No files were found with the provided path: app/build/outputs/apk/release/DrcomAutoLogin-v*-debug.apk`
 
 **原因**：`Upload APK artifact` 报这个错，说明**签名那一步没产出 apk**（`Build unsigned release APK` 或 `Sign APK with v1 + v2 + v3` 的某一步先失败了）。往上翻，真正的错误通常在 `Build unsigned release APK` 那一步，一般是 Kotlin 语法错误或资源文件错误。
 
@@ -270,7 +270,7 @@ GitHub 的 artifact 默认**保留 90 天**，过期后链接失效。解决办�
 1. 修改源码（在网页上直接编辑，或用 GitHub Desktop / git 命令行 push）。
 2. `Commit changes` / `push` 到 `main` 分支。
 3. 等 `Actions` 自动编译完成。
-4. 下载新的 `DrcomAutoLogin-APK`，解压得到 `DrcomAutoLogin-debug.apk`。
+4. 下载新的 `DrcomAutoLogin-APK`，解压得到 `DrcomAutoLogin-v<版本号>-debug.apk`（版本号变大即确认为新包）。
 5. 直接把新的 apk 覆盖安装到手机上。
 
 **覆盖安装的数据保留情况**：

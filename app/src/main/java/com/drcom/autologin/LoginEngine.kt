@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
+import android.net.Uri
 import android.net.wifi.WifiManager
 import org.json.JSONObject
 import java.io.IOException
@@ -188,21 +189,82 @@ object LoginEngine {
         }
     }
 
+    // ---------------------------------------------------------- 强制门户参数
+
+    /** 网关视角的门户参数（从强制门户重定向的 Location 里解析）。 */
+    private data class PortalParams(
+        val userIp: String,
+        val mac: String,      // 已归一化为 12 位大写十六进制（去掉 - 和 :）
+        val acIp: String,
+        val acName: String
+    )
+
+    /** 触发强制门户重定向，从 Location 头解析 wlanuserip / mac / wlanacip / wlancname。
+     *  拿不到返回 null。全程只读，不改变任何服务端状态。 */
+    private fun discoverPortalParams(ctx: Context): PortalParams? {
+        val probes = listOf(
+            "http://9.9.9.9/",
+            "http://connectivitycheck.gstatic.com/generate_204",
+            "http://www.msftconnecttest.com/connecttest.txt",
+            "http://204.79.197.200/"
+        )
+        for (probe in probes) {
+            try {
+                val u = URL(probe)
+                val net = wifiNetwork(ctx)
+                val conn = (net?.openConnection(u) ?: u.openConnection()) as HttpURLConnection
+                conn.requestMethod = "GET"
+                conn.instanceFollowRedirects = false      // 关键：不要跟，要读 Location
+                conn.connectTimeout = 5000
+                conn.readTimeout = 5000
+                conn.setRequestProperty("User-Agent", USER_AGENT)
+                try {
+                    val code = conn.responseCode
+                    val loc = conn.getHeaderField("Location")
+                    LogStore.log(ctx, "INFO", "门户探测 $probe → HTTP $code, Location=${loc ?: "(无)"}")
+                    if (loc.isNullOrBlank()) continue
+                    val uri = Uri.parse(loc)
+                    val userIp = uri.getQueryParameter("wlanuserip") ?: ""
+                    val macRaw = uri.getQueryParameter("mac") ?: ""
+                    val acIp = uri.getQueryParameter("wlanacip") ?: ""
+                    val acName = uri.getQueryParameter("wlancname") ?: ""
+                    if (userIp.isNotEmpty()) {
+                        val mac = macRaw.uppercase().replace(":", "").replace("-", "")
+                        LogStore.log(
+                            ctx, "INFO",
+                            "门户参数: wlanuserip=$userIp mac=$mac wlanacip=$acIp wlancname=$acName"
+                        )
+                        return PortalParams(userIp, mac, acIp, acName)
+                    }
+                } finally {
+                    conn.disconnect()
+                }
+            } catch (t: Throwable) {
+                LogStore.log(ctx, "INFO", "门户探测 $probe 异常: ${t.javaClass.simpleName}: ${t.message}")
+            }
+        }
+        return null
+    }
+
     // ---------------------------------------------------------------- 登录
 
     /** 返回 (是否成功, 服务端 msg 或本地诊断信息)。协议参数与 Windows 版完全一致，不要改。 */
-    fun login(ctx: Context, cfg: Config, ip: String, mac: String): Pair<Boolean, String> {
+    fun login(
+        ctx: Context, cfg: Config,
+        wlanUserIp: String, wlanUserMac: String,
+        wlanAcIp: String, wlanAcName: String
+    ): Pair<Boolean, String> {
         val callback = "dr" + Random.nextInt(1000, 10000)
         val params = linkedMapOf(
             "callback" to callback,
             "login_method" to "1",
             "user_account" to (cfg.account + cfg.suffix),
             "user_password" to cfg.password,
-            "wlan_user_ip" to ip,
+            "wlan_user_ip" to wlanUserIp,
             "wlan_user_ipv6" to "",
-            "wlan_user_mac" to mac,
-            "wlan_ac_ip" to "",
-            "wlan_ac_name" to "",
+            "wlan_user_mac" to wlanUserMac,
+            "wlan_ac_ip" to wlanAcIp,
+            "wlan_ac_name" to wlanAcName,
             "terminal_type" to "1",
             "jsVersion" to "4.1.3",
             "lang" to "zh-cn",
@@ -212,7 +274,7 @@ object LoginEngine {
         val url = "http://" + cfg.host + ":" + cfg.port + "/eportal/portal/login?" + query
         LogStore.log(
             ctx, "INFO",
-            "登录请求: ${cfg.host}:${cfg.port}（网络=${networkLabel(ctx)}，本机IP=$ip，MAC=$mac）"
+            "登录请求: ${cfg.host}:${cfg.port}（网络=${networkLabel(ctx)}，本机IP=$wlanUserIp，MAC=$wlanUserMac）"
         )
         val res = try {
             httpGet(ctx, url, LOGIN_TIMEOUT_MS)
@@ -288,10 +350,21 @@ object LoginEngine {
             return false
         }
 
-        val (ip, mac) = discoverIpMac(ctx, cfg.host)
+        // 优先用网关视角的参数（强制门户重定向里带的）；拿不到再退回本机探测
+        val portal = discoverPortalParams(ctx)
+        val (localIp, localMac) = discoverIpMac(ctx, cfg.host)
+        val userIp = portal?.userIp?.takeIf { it.isNotEmpty() } ?: localIp
+        val userMac = portal?.mac?.takeIf { it.isNotEmpty() } ?: localMac
+        val acIp = portal?.acIp ?: ""
+        val acName = portal?.acName ?: ""
+
+        LogStore.log(
+            ctx, "INFO",
+            "登录参数: ip=$userIp mac=$userMac acIp=${acIp.ifEmpty { "(空)" }} acName=${acName.ifEmpty { "(空)" }}"
+        )
         LogStore.log(ctx, "INFO", "正在登录 ${cfg.account}${cfg.suffix} ...")
 
-        val (ok, msg) = login(ctx, cfg, ip, mac)
+        val (ok, msg) = login(ctx, cfg, userIp, userMac, acIp, acName)
         if (ok) {
             LogStore.log(ctx, "INFO", "登录成功")
             Prefs.saveStatus(ctx, networkReachable = true, online = true, lastError = null)

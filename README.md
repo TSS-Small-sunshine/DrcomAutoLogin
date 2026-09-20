@@ -41,7 +41,7 @@
 | ViewBinding | 启用（`buildFeatures { viewBinding = true }`） |
 | release 混淆 | 关闭（`isMinifyEnabled = false`） |
 | namespace / applicationId | `com.drcom.autologin` |
-| 版本号 | `versionName "1.1"` / `versionCode 2` |
+| 版本号 | `versionName "1.2"` / `versionCode 3` |
 
 ### 依赖（共 5 个，无其它）
 
@@ -62,8 +62,8 @@
 | Runner | `ubuntu-latest` |
 | 步骤（共 9 步） | `actions/checkout@v4` → `actions/setup-java@v4`（temurin 17）→ `gradle/actions/setup-gradle@v4`（Gradle 8.9）→ **Decode signing keystore**（把 `SIGNING_KEYSTORE_BASE64` 解码成临时密钥库）→ **Build unsigned release APK**（`gradle assembleRelease --no-daemon --stacktrace`，产出**未签名**包）→ **Sign APK with v1 + v2 + v3**（`zipalign` 对齐后用 `apksigner` 显式启用 v1+v2+v3 签名）→ **Verify APK**（签名 + manifest：`apksigner verify --verbose --print-certs`、v1 签名文件存在性检查、`aapt2 dump badging`）→ **Upload APK artifact**（`actions/upload-artifact@v4`）→ **Publish Release (tag debug)**（`gh release`，tag 固定 `debug`，带 `--prerelease`） |
 | Artifact 名 | **`DrcomAutoLogin-APK`** |
-| 产物路径 | **`app/build/outputs/apk/release/DrcomAutoLogin-debug.apk`** |
-| GitHub Release | tag **`debug`**，标题「Debug 构建（自动更新）」，附件同为 `DrcomAutoLogin-debug.apk`，每次推送自动覆盖重建 |
+| 产物路径 | **`app/build/outputs/apk/release/DrcomAutoLogin-v<版本号>-debug.apk`**（版本号取自 `app/build.gradle.kts` 的 `versionName`，例：`DrcomAutoLogin-v1.1-debug.apk`） |
+| GitHub Release | tag **`debug`**，标题「Debug 构建（自动更新）」，附件名带版本号、形如 `DrcomAutoLogin-v1.1-debug.apk`，每次推送自动覆盖重建 |
 | 实测构建耗时 | 约 **1 分 20 秒**（首次含依赖下载约 2-3 分钟） |
 
 ### 签名
@@ -154,11 +154,11 @@ GET http://{HOST}:801/eportal/portal/login
     &login_method=1
     &user_account={账号}{运营商后缀}
     &user_password={密码}
-    &wlan_user_ip={本机IP}
+    &wlan_user_ip={网关视角的用户IP}
     &wlan_user_ipv6=
-    &wlan_user_mac={本机MAC}
-    &wlan_ac_ip=
-    &wlan_ac_name=
+    &wlan_user_mac={网关视角的用户MAC}
+    &wlan_ac_ip={网关的 AC IP}
+    &wlan_ac_name={网关的 AC 名称}
     &terminal_type=1
     &jsVersion=4.1.3
     &lang=zh-cn
@@ -171,11 +171,13 @@ GET http://{HOST}:801/eportal/portal/login
 
 判断逻辑：`result == 1` → **登录成功**。
 
+> **这 4 个 `wlan_*` 参数从哪来？** 登录参数中的 `wlan_user_ip` / `wlan_user_mac` / `wlan_ac_ip` / `wlan_ac_name` 优先取自**强制门户重定向**（网关在 302 的 `Location` 里给出，与 AC 会话一致）；只有在拿不到重定向时才退回本机网卡 IP。若日志出现 `AC认证失败`，先看日志里 `门户参数:` 那一行是否有值。
+
 ### 要点
 
 - **运营商后缀拼在 `user_account` 里**：移动 `@yd` / 电信 `@dx` / 联通 `@lt` / 空 = 校园用户。
 - `login_method=1`、`terminal_type=1`、`jsVersion=4.1.3` 是**固定必填**，缺任意一个都会认证失败（实测）。
-- **IP / MAC 探测**：本机 IP 优先从 `chkstatus` 响应的 `v4ip` 取，失败则用 `DatagramSocket` connect 到网关后读 `localAddress`；MAC 优先取 `olmac`，失败则用占位 `000000000000`。
+- **IP / MAC 探测**：先试**强制门户重定向**（请求一个非门户地址，未认证时网关返回 302，`Location` 里带 `wlanuserip` / `mac` / `wlanacip` / `wlancname`，与 AC 会话一致）；拿不到再退回本机：IP 优先从 `chkstatus` 响应的 `v4ip` 取，失败则用 `DatagramSocket` connect 到网关后读 `localAddress`；MAC 优先取 `olmac`，失败则用占位 `000000000000`。
 - 全程 **HTTP 明文**（Android 9+ 需要 `usesCleartextTraffic="true"`，本工程已开启）。
 
 ---
@@ -206,13 +208,15 @@ android/
 
 ### 路径 0：直接从 Releases 下载（最省事，推荐）
 
-打开 <https://github.com/TSS-Small-sunshine/DrcomAutoLogin/releases> → 找到标签为 **`debug`** 的 Release（标题「Debug 构建（自动更新）」）→ 下载附件 **`DrcomAutoLogin-debug.apk`** → 传到手机安装。
+打开 <https://github.com/TSS-Small-sunshine/DrcomAutoLogin/releases> → 找到标签为 **`debug`** 的 Release（标题「Debug 构建（自动更新）」）→ 下载附件 **`DrcomAutoLogin-v<版本号>-debug.apk`**（例如 `DrcomAutoLogin-v1.1-debug.apk`）→ 传到手机安装。
 
-> 这个 Release 由 CI 在每次推送后自动覆盖更新，**下载链接固定不变**，不需要登录 GitHub。
+> 这个 Release 由 CI 在每次推送后自动覆盖更新，**下载页地址（`/releases/tag/debug`）固定不变**，但**附件文件名会随版本变化**，不需要登录 GitHub。
+>
+> 下载页上附件名会带版本号（如 `DrcomAutoLogin-v1.1-debug.apk`），**看版本号就知道是不是最新**。
 
 ### 路径 A：从 Actions 产物下载
 
-1. 打开仓库的 `Actions` 标签页 → 点进 `Build APK` 任务 → 拉到页面底部 `Artifacts` 区域 → 下载 **`DrcomAutoLogin-APK`**（得到 zip，解压出 **`DrcomAutoLogin-debug.apk`**，与 Releases 里那个附件同名同内容）。
+1. 打开仓库的 `Actions` 标签页 → 点进 `Build APK` 任务 → 拉到页面底部 `Artifacts` 区域 → 下载 **`DrcomAutoLogin-APK`**（得到 zip，解压出 **`DrcomAutoLogin-v<版本号>-debug.apk`**，与 Releases 里那个附件同名同内容）。
 2. 把 APK 传到手机安装（需按提示允许「安装未知应用」）。
 3. 打开 App，填上网账号 / 密码 / 运营商，点「保存配置」→ 点「立即登录」验证。
 4. 打开「自动检查」，然后按 [02 - 国产 ROM 保活指引](docs/02-国产ROM保活指引.md) 配好自启动与省电白名单。
@@ -278,6 +282,7 @@ android/
 | 一直显示「网关不可达」 | 手机完全连不上网关：当前不在校园 WiFi、网关地址填错（默认 `172.16.80.3`），或请求走了蜂窝数据 |
 | 日志里是 `探测结果: OFFLINE (HTTP xxx, 非 JSONP: ...)` 却还是不登录 | 旧版本会把网关返回的 404/5xx 误判成「网关不可达」而跳过登录，**已修复**；升级后若仍不登录，看日志里 `登录响应` 那一行的 HTTP 状态码与响应片段 |
 | 登录失败 / 提示密码错误 | 多半是运营商选错了：校园用户**不要**加后缀，移动 `@yd`、电信 `@dx`、联通 `@lt` |
+| 登录失败 / 提示 `AC认证失败` | 登录参数里的 IP/MAC 与 AC 会话对不上。登录参数中的 `wlan_user_ip` / `wlan_user_mac` / `wlan_ac_ip` / `wlan_ac_name` 优先取自**强制门户重定向**（网关在 302 的 `Location` 里给出，与 AC 会话一致），只有在拿不到重定向时才退回本机网卡 IP；先看日志里 `门户参数:` 那一行是否有值 |
 | 显示已在线却打不开网页 | 会话可能未真正通网，手动断开 WiFi 重连，或点一次「立即登录」 |
 | App 过一会儿就不动了 | 保活没配好，按 [02 - 国产 ROM 保活指引](docs/02-国产ROM保活指引.md) 配自启动与省电白名单 |
 | 改了配置没生效 | 改完必须点「保存配置」，再点一次「立即登录」 |

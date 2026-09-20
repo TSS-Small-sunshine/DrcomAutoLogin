@@ -55,7 +55,10 @@ jobs:
           if [ -z "$IN" ]; then IN=$(ls app/build/outputs/apk/release/*.apk | head -1); fi
           echo "unsigned input: $IN"
 
-          OUT=app/build/outputs/apk/release/DrcomAutoLogin-debug.apk
+          VERSION=$(grep -oP 'versionName\s*=\s*"\K[^"]+' app/build.gradle.kts | head -1)
+          if [ -z "$VERSION" ]; then echo "无法从 app/build.gradle.kts 解析 versionName"; exit 1; fi
+          OUT="app/build/outputs/apk/release/DrcomAutoLogin-v${VERSION}-debug.apk"
+          echo "versionName = $VERSION"
 
           "$BT/zipalign" -f -p 4 "$IN" "$RUNNER_TEMP/aligned.apk"
 
@@ -82,14 +85,14 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: DrcomAutoLogin-APK
-          path: app/build/outputs/apk/release/DrcomAutoLogin-debug.apk
+          path: app/build/outputs/apk/release/DrcomAutoLogin-v*-debug.apk
           if-no-files-found: error
 
       # 证据收集为主：全部输出先打印出来，再对必要项做硬判定
       - name: Verify APK (signature + manifest)
         run: |
           set -uo pipefail
-          APK=app/build/outputs/apk/release/DrcomAutoLogin-debug.apk
+          APK=$(ls app/build/outputs/apk/release/DrcomAutoLogin-v*-debug.apk | head -1)
           BT=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
 
           echo "=== apksigner verify --verbose --print-certs ==="
@@ -127,29 +130,31 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          APK=app/build/outputs/apk/release/DrcomAutoLogin-debug.apk
+          VERSION=$(grep -oP 'versionName\s*=\s*"\K[^"]+' app/build.gradle.kts | head -1)
+          APK=$(ls app/build/outputs/apk/release/DrcomAutoLogin-v*-debug.apk | head -1)
 
           NOTES="自动构建的 **Debug 版** APK（正式 release 签名）。
 
           | 项 | 值 |
           | --- | --- |
           | 包名 | \`com.drcom.autologin\` |
-          | 版本 | 1.0 (versionCode 1) |
+          | 版本 | 1.1 (versionCode 2) |
+          | APK 文件名 | \`DrcomAutoLogin-v${VERSION}-debug.apk\` |
           | 系统要求 | Android 8.0 (API 26) 及以上 |
           | 签名方案 | v1 (JAR) + v2 + v3 |
           | 构建提交 | \`${{ github.sha }}\` |
           | 构建编号 | #${{ github.run_number }} |
 
-          **安装**：下载下面的 \`DrcomAutoLogin-debug.apk\`，传到手机安装（需允许「安装未知应用」）。
+          **安装**：下载下面的 \`DrcomAutoLogin-v${VERSION}-debug.apk\`，传到手机安装（需允许「安装未知应用」）。
 
-          > 本 Release 每次推送代码后由 CI 自动覆盖更新，下载链接固定不变。"
+          > 本 Release 每次推送代码后由 CI 自动覆盖更新，Release 页面地址固定不变，但附件文件名会随版本变化（看版本号即可分辨新旧包）。"
 
           if gh release view debug >/dev/null 2>&1; then
             gh release delete debug --yes --cleanup-tag
           fi
 
           gh release create debug "$APK" \
-            --title "Debug 构建（自动更新）" \
+            --title "Debug 构建 v${VERSION}（自动更新）" \
             --notes "$NOTES" \
             --prerelease \
             --target "$GITHUB_SHA"
