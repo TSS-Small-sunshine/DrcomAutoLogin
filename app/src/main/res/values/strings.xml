@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Dr.COM 校园网自动登录</string>
+
+    <string name="section_status">连接状态</string>
+    <string name="section_config">账号配置</string>
+    <string name="section_automation">自动化</string>
+    <string name="section_log">运行日志</string>
+
+    <string name="status_network_label">网络：%1$s</string>
+    <string name="status_online_label">在线状态：%1$s</string>
+    <string name="status_last_check_label">上次检查：%1$s</string>
+    <string name="status_last_error_label">上次错误：%1$s</string>
+    <string name="status_ssid_label">当前 WiFi：%1$s</string>
+
+    <string name="state_reachable">可达</string>
+    <string name="state_unreachable">不可达</string>
+    <string name="state_unknown">未知</string>
+    <string name="state_online">已在线</string>
+    <string name="state_offline">未在线</string>
+    <string name="value_none">—</string>
+
+    <string name="label_host">认证服务器</string>
+    <string name="hint_host">172.16.80.3</string>
+    <string name="label_port">端口</string>
+    <string name="hint_port">801</string>
+    <string name="label_account">上网账号</string>
+    <string name="hint_account">学号 / 手机号</string>
+    <string name="label_suffix">运营商</string>
+    <string name="label_password">密码</string>
+    <string name="hint_password">上网密码</string>
+
+    <string name="label_auto_check">自动检查</string>
+    <string name="label_interval">检查间隔</string>
+    <string name="interval_suffix">%1$d 分钟</string>
+    <string name="label_ssid_filter">仅在指定 WiFi 下生效</string>
+    <string name="hint_ssid_filter">SSID，逗号分隔；留空=不限（需要定位权限）</string>
+    <string name="label_keep_alive">常驻通知保活</string>
+    <string name="hint_keep_alive">国产 ROM 建议开启，避免后台被系统清理</string>
+
+    <string name="btn_save">保存配置</string>
+    <string name="btn_login_now">立即登录</string>
+    <string name="btn_battery">打开电池优化设置</string>
+    <string name="btn_clear_log">清除日志</string>
+    <string name="btn_refresh_log">刷新日志</string>
+
+    <string name="log_empty">（暂无日志）</string>
+
+    <string name="toast_need_account">请先填写上网账号</string>
+    <string name="toast_bad_port">端口需在 1-65535 之间</string>
+    <string name="toast_saved">配置已保存</string>
+    <string name="toast_login_queued">已提交一次登录检查</string>
+    <string name="toast_log_cleared">日志已清除</string>
+    <string name="toast_permission_denied">权限被拒绝，指定 WiFi / 保活通知可能不可用</string>
+    <string name="toast_battery_unavailable">无法打开电池优化设置</string>
+
+    <string name="notify_channel_name">自动登录保活</string>
+    <string name="notify_channel_desc">保持校园网自动登录在后台运行</string>
+    <string name="notify_title">Dr.COM 自动登录</string>
+    <string name="notify_text">正在守护校园网连接</string>
+</resources>

@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="colorPrimary">#1976D2</color>
+    <color name="colorPrimaryDark">#0D47A1</color>
+    <color name="colorAccent">#1976D2</color>
+    <color name="white">#FFFFFF</color>
+
+    <color name="screen_bg">#FAFAFA</color>
+    <color name="card_bg">#F2F4F7</color>
+    <color name="text_primary">#1F2937</color>
+    <color name="text_secondary">#6B7280</color>
+    <color name="text_hint">#9CA3AF</color>
+
+    <color name="status_online">#2E7D32</color>
+    <color name="status_offline">#C62828</color>
+    <color name="status_unknown">#6B7280</color>
+
+    <color name="ic_launcher_background">#1976D2</color>
+</resources>
