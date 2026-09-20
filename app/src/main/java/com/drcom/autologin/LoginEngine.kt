@@ -17,6 +17,11 @@ import java.net.URLEncoder
 import java.util.Locale
 import kotlin.random.Random
 
+// 本校园环境（福建农业职业技术学院）的门户与 AC 地址，用于门户参数探测；其它学校需修改。
+// 例：AC/网关自身为 http://172.16.80.2/ 与 http://172.16.80.3/（门户页 http://172.16.80.3/a79.htm）。
+private const val PORTAL_HOST = "172.16.80.3"
+private const val PORTAL_AC_HOST = "172.16.80.2"
+
 /**
  * Dr.COM 校园网登录引擎。
  *
@@ -102,15 +107,19 @@ object LoginEngine {
         conn.setRequestProperty("Connection", "close")
         return try {
             val code = conn.responseCode
-            val stream = if (code in 200..299) conn.inputStream else conn.errorStream
-            val body = try {
-                stream?.bufferedReader()?.use { it.readText() } ?: ""
-            } catch (_: Throwable) {
-                ""
-            }
-            HttpResult(code, body)
+            HttpResult(code, readBody(conn, code))
         } finally {
             conn.disconnect()
+        }
+    }
+
+    /** 读响应正文（2xx 走 inputStream，其余走 errorStream）；读不到返回 ""。 */
+    private fun readBody(conn: HttpURLConnection, code: Int): String {
+        return try {
+            val stream = if (code in 200..299) conn.inputStream else conn.errorStream
+            stream?.bufferedReader()?.use { it.readText() } ?: ""
+        } catch (_: Throwable) {
+            ""
         }
     }
 
@@ -134,23 +143,35 @@ object LoginEngine {
         }
     }
 
-    /** 先试 chkstatus 的 v4ip / olmac，IP 再 fallback localIpFor，MAC 再 fallback 000000000000。 */
+    /** chkstatus 正文里的兜底取值（正文不是合法 JSONP 时用）。 */
+    private val V4IP_RE = Regex("\"v4ip\"\\s*:\\s*\"([0-9.]+)\"", RegexOption.IGNORE_CASE)
+    private val OLMAC_RE = Regex("\"olmac\"\\s*:\\s*\"([0-9A-Za-z]+)\"", RegexOption.IGNORE_CASE)
+
+    /** 先试 chkstatus 的 v4ip / olmac，IP 再 fallback localIpFor，MAC 再 fallback 000000000000。
+     *  注意：**不判断 result**——未认证（result=0）时正文里同样可能带着网关视角的
+     *  v4ip / olmac，那正是登录最需要的参数，必须无条件尝试取值。 */
     fun discoverIpMac(ctx: Context, host: String): Pair<String, String> {
         var ip = ""
         var mac = ""
         try {
-            val txt = httpGet(ctx, "http://$host/drcom/chkstatus?callback=cb&jsVersion=4.X", DISCOVER_TIMEOUT_MS).body
-            val obj = extractJson(txt)
+            val body = httpGet(ctx, "http://$host/drcom/chkstatus?callback=cb&jsVersion=4.X", DISCOVER_TIMEOUT_MS).body
+            val obj = extractJson(body)
             if (obj != null) {
-                ip = obj.optString("v4ip", "").trim()
-                mac = obj.optString("olmac", "").trim()
-                    .uppercase(Locale.US)
-                    .replace(":", "")
-                    .replace("-", "")
+                ip = obj.optString("v4ip", "").trim().takeIf { it.isNotEmpty() && it != "null" } ?: ""
+                mac = obj.optString("olmac", "").trim().takeIf { it.isNotEmpty() && it != "null" } ?: ""
             }
+            // 正文解析不出 JSONP（例如被网关换成 HTML）时，正则直接抠
+            if (ip.isEmpty()) ip = V4IP_RE.find(body)?.groupValues?.get(1)?.trim().orEmpty()
+            if (mac.isEmpty()) mac = OLMAC_RE.find(body)?.groupValues?.get(1)?.trim().orEmpty()
         } catch (_: Throwable) {
             // 忽略，走 fallback
         }
+        if (ip.isNotEmpty() && !isValidIpv4(ip)) ip = ""
+        mac = normalizeMac(mac)
+        LogStore.log(
+            ctx, "INFO",
+            "本机兜底: chkstatus v4ip=${ip.ifEmpty { "(空)" }} olmac=${mac.ifEmpty { "(空)" }}"
+        )
         if (ip.isEmpty()) ip = localIpFor(host)
         if (mac.isEmpty()) mac = MAC_FALLBACK
         return ip to mac
@@ -167,7 +188,7 @@ object LoginEngine {
      *  - ONLINE       : 拿到 JSONP 且 result == 1
      *  - OFFLINE      : 拿到了 HTTP 应答（含 4xx/5xx）但未认证
      *  - UNREACHABLE  : 网络层失败（抛异常）
-     *  detail 用于日志，例如 "HTTP 200, result=0" / "HTTP 404, 非 JSONP: <!DOCTYPE html>..."
+     *  detail 用于日志，例如 "HTTP 200, result=0, 正文: cb({...})" / "HTTP 404, 非 JSONP: <!DOCTYPE html>..."
      */
     fun probe(ctx: Context, host: String): ProbeResult {
         val url = "http://$host/drcom/chkstatus?callback=cb&jsVersion=4.X"
@@ -177,12 +198,16 @@ object LoginEngine {
             if (json == null) {
                 ProbeResult(
                     ProbeState.OFFLINE,
-                    "HTTP ${res.code}, 非 JSONP: ${res.body.take(120).replace("\n", " ")}"
+                    "HTTP ${res.code}, 非 JSONP: ${snippet(res.body)}"
                 )
             } else {
                 val r = json.optInt("result", -1)
-                if (r == 1) ProbeResult(ProbeState.ONLINE, "HTTP ${res.code}, result=1")
-                else ProbeResult(ProbeState.OFFLINE, "HTTP ${res.code}, result=$r")
+                if (r == 1) {
+                    ProbeResult(ProbeState.ONLINE, "HTTP ${res.code}, result=1")
+                } else {
+                    // 关键诊断：未认证时正文里可能就带着网关视角的 v4ip / olmac，必须打出来
+                    ProbeResult(ProbeState.OFFLINE, "HTTP ${res.code}, result=$r, 正文: ${snippet(res.body)}")
+                }
             }
         } catch (t: Throwable) {
             ProbeResult(ProbeState.UNREACHABLE, "${t.javaClass.simpleName}: ${t.message}")
@@ -191,7 +216,7 @@ object LoginEngine {
 
     // ---------------------------------------------------------- 强制门户参数
 
-    /** 网关视角的门户参数（从强制门户重定向的 Location 里解析）。 */
+    /** 网关视角的门户参数（从强制门户的 Location 头或门户页正文里解析）。 */
     private data class PortalParams(
         val userIp: String,
         val mac: String,      // 已归一化为 12 位大写十六进制（去掉 - 和 :）
@@ -199,50 +224,172 @@ object LoginEngine {
         val acName: String
     )
 
-    /** 触发强制门户重定向，从 Location 头解析 wlanuserip / mac / wlanacip / wlancname。
-     *  拿不到返回 null。全程只读，不改变任何服务端状态。 */
+    /** 参数名兼容表：不同厂商固件命名不一致，按顺序取第一个非空值。 */
+    private val IP_NAMES = arrayOf("wlanuserip", "wlan_user_ip", "userip", "user_ip")
+    private val MAC_NAMES = arrayOf("mac", "wlanusermac", "wlan_user_mac")
+    private val AC_IP_NAMES = arrayOf("wlanacip", "wlan_ac_ip", "acip")
+    private val AC_NAME_NAMES = arrayOf("wlancname", "wlanacname", "wlan_ac_name", "acname")
+
+    // 正文里的参数（覆盖 meta refresh / JS 变量 / hidden input 三种形态）
+    private val PORTAL_PARAM_RE = Regex(
+        """(wlan_?user_?ip|user_?ip)\s*[=:]\s*['"]?([0-9]{1,3}(?:\.[0-9]{1,3}){3})""",
+        RegexOption.IGNORE_CASE
+    )
+    private val PORTAL_MAC_RE = Regex(
+        """(mac|wlan_?user_?mac)\s*[=:]\s*['"]?([0-9A-Fa-f]{2}(?:[-:]?[0-9A-Fa-f]{2}){5})""",
+        RegexOption.IGNORE_CASE
+    )
+    private val PORTAL_AC_IP_RE = Regex(
+        """(wlan_?ac_?ip|acip)\s*[=:]\s*['"]?([0-9]{1,3}(?:\.[0-9]{1,3}){3})""",
+        RegexOption.IGNORE_CASE
+    )
+    private val PORTAL_AC_NAME_RE = Regex(
+        """(wlan_?ac_?name|wlancname|acname)\s*[=:]\s*['"]?([A-Za-z0-9_\-\.]{2,64})""",
+        RegexOption.IGNORE_CASE
+    )
+
+    /** 日志用片段：前 300 字符 + 换行替换成空格。 */
+    private fun snippet(text: String, max: Int = 300): String =
+        text.take(max).replace("\n", " ").replace("\r", " ")
+
+    /** 是否合法 IPv4（0-255.0-255.0-255.0-255）。 */
+    private fun isValidIpv4(s: String): Boolean {
+        if (s.isBlank()) return false
+        val parts = s.trim().split('.')
+        if (parts.size != 4) return false
+        return parts.all { p ->
+            p.isNotEmpty() && p.length <= 3 && p.all { it.isDigit() } && p.toInt() in 0..255
+        }
+    }
+
+    /** 归一化 MAC：去掉 - 和 :，转大写。 */
+    private fun normalizeMac(raw: String): String =
+        raw.trim().uppercase(Locale.US).replace(":", "").replace("-", "")
+
+    /** 来源 1/2：从 query 串（Location 的 ?后面部分，或绝对化后的重定向地址）解析 4 个参数。
+     *  IP 非合法 IPv4 视为未命中，返回 null。 */
+    private fun paramsFromQuery(query: String?): PortalParams? {
+        if (query.isNullOrBlank()) return null
+        return try {
+            val uri = Uri.parse("http://portal.local/?$query")
+            fun pick(names: Array<String>): String {
+                for (n in names) {
+                    val v = uri.getQueryParameter(n)?.trim().orEmpty()
+                    if (v.isNotEmpty()) return v
+                }
+                return ""
+            }
+            val userIp = pick(IP_NAMES)
+            if (!isValidIpv4(userIp)) return null
+            PortalParams(
+                userIp,
+                normalizeMac(pick(MAC_NAMES)),
+                pick(AC_IP_NAMES),
+                pick(AC_NAME_NAMES)
+            )
+        } catch (_: Throwable) {
+            null
+        }
+    }
+
+    /** 来源 3：从响应正文里正则提取 4 个参数（meta refresh / JS 变量 / hidden input）。
+     *  IP 非合法 IPv4 视为未命中，返回 null。 */
+    private fun paramsFromBody(body: String): PortalParams? {
+        if (body.isBlank()) return null
+        val userIp = PORTAL_PARAM_RE.find(body)?.groupValues?.get(2)?.trim().orEmpty()
+        if (!isValidIpv4(userIp)) return null
+        val mac = PORTAL_MAC_RE.find(body)?.groupValues?.get(2)?.trim().orEmpty()
+        val acIp = PORTAL_AC_IP_RE.find(body)?.groupValues?.get(2)?.trim().orEmpty()
+        val acName = PORTAL_AC_NAME_RE.find(body)?.groupValues?.get(2)?.trim().orEmpty()
+        return PortalParams(userIp, normalizeMac(mac), acIp, acName)
+    }
+
+    /** 触发强制门户重定向，按列表顺序依次尝试 12 个探测地址，从
+     *  Location 头 / 绝对化后的重定向地址 / 响应正文 三个来源解析
+     *  wlanuserip / mac / wlanacip / wlancname。任一命中即返回；全部失败返回 null。
+     *  每个探测地址无论成功失败都写一条完整日志，便于远程诊断。
+     *  全程只读，不改变任何服务端状态。 */
     private fun discoverPortalParams(ctx: Context): PortalParams? {
         val probes = listOf(
-            "http://9.9.9.9/",
-            "http://connectivitycheck.gstatic.com/generate_204",
+            // 小米自带强制门户探测地址（本机是小米，系统自己就用这个，最可能被网关拦截）
+            "http://connect.rom.miui.com/generate_204",
+            // 常见系统的强制门户探测地址
             "http://www.msftconnecttest.com/connecttest.txt",
-            "http://204.79.197.200/"
+            "http://captive.apple.com/hotspot-detect.html",
+            "http://detectportal.firefox.com/success.txt",
+            "http://connectivitycheck.platform.hicloud.com/generate_204",
+            // 普通外网 HTTP 站点（未认证时必然被网关拦截）
+            "http://www.baidu.com/",
+            "http://www.qq.com/",
+            // 拿不到 DNS 也能命中的公网 IP
+            "http://1.1.1.1/",
+            "http://223.5.5.5/",
+            // 网关与 AC 自身（本校园：http://172.16.80.2/ 与 http://172.16.80.3/a79.htm）
+            "http://$PORTAL_AC_HOST/",
+            "http://$PORTAL_HOST/",
+            "http://$PORTAL_HOST/a79.htm"
         )
-        for (probe in probes) {
+        for ((idx, probe) in probes.withIndex()) {
+            val no = idx + 1
             try {
                 val u = URL(probe)
                 val net = wifiNetwork(ctx)
                 val conn = (net?.openConnection(u) ?: u.openConnection()) as HttpURLConnection
                 conn.requestMethod = "GET"
                 conn.instanceFollowRedirects = false      // 关键：不要跟，要读 Location
-                conn.connectTimeout = 5000
-                conn.readTimeout = 5000
+                conn.connectTimeout = 3000                // 12 个地址，最坏 36 秒；绝大多数会立即返回
+                conn.readTimeout = 3000
                 conn.setRequestProperty("User-Agent", USER_AGENT)
                 try {
                     val code = conn.responseCode
                     val loc = conn.getHeaderField("Location")
-                    LogStore.log(ctx, "INFO", "门户探测 $probe → HTTP $code, Location=${loc ?: "(无)"}")
-                    if (loc.isNullOrBlank()) continue
-                    val uri = Uri.parse(loc)
-                    val userIp = uri.getQueryParameter("wlanuserip") ?: ""
-                    val macRaw = uri.getQueryParameter("mac") ?: ""
-                    val acIp = uri.getQueryParameter("wlanacip") ?: ""
-                    val acName = uri.getQueryParameter("wlancname") ?: ""
-                    if (userIp.isNotEmpty()) {
-                        val mac = macRaw.uppercase().replace(":", "").replace("-", "")
+                    val body = readBody(conn, code)
+                    val body300 = snippet(body)
+                    var line = "门户探测 #$no $probe → HTTP $code | Location=${loc ?: "(无)"}"
+                    if (code == 200 && body300.isNotEmpty()) line += " | 正文前 300: $body300"
+                    LogStore.log(ctx, "INFO", line)
+
+                    // 来源 1/2：Location 头；若是相对路径，先用 URL(base, loc) 拼成绝对 URL 再解析
+                    var hit: PortalParams? = null
+                    var from = ""
+                    if (!loc.isNullOrBlank()) {
+                        val absLoc = try {
+                            URL(u, loc).toString()
+                        } catch (_: Throwable) {
+                            loc
+                        }
+                        val byLocation = paramsFromQuery(absLoc.substringAfter('?', ""))
+                        if (byLocation != null) {
+                            hit = byLocation
+                            from = "#$no Location"
+                        }
+                    }
+                    // 来源 3：响应正文
+                    if (hit == null) {
+                        val byBody = paramsFromBody(body)
+                        if (byBody != null) {
+                            hit = byBody
+                            from = "#$no 正文"
+                        }
+                    }
+                    val found = hit
+                    if (found != null) {
+                        // 渲染效果示例: 门户参数(来自 #1 Location): ... / 门户参数(来自 #3 正文): ...
                         LogStore.log(
                             ctx, "INFO",
-                            "门户参数: wlanuserip=$userIp mac=$mac wlanacip=$acIp wlancname=$acName"
+                            "门户参数(来自 $from): wlanuserip=${found.userIp} mac=${found.mac} " +
+                                "wlanacip=${found.acIp} wlancname=${found.acName}"
                         )
-                        return PortalParams(userIp, mac, acIp, acName)
+                        return found
                     }
                 } finally {
                     conn.disconnect()
                 }
             } catch (t: Throwable) {
-                LogStore.log(ctx, "INFO", "门户探测 $probe 异常: ${t.javaClass.simpleName}: ${t.message}")
+                LogStore.log(ctx, "INFO", "门户探测 #$no $probe → 异常 ${t.javaClass.simpleName}: ${t.message}")
             }
         }
+        LogStore.log(ctx, "INFO", "门户探测: ${probes.size} 个地址均未命中")
         return null
     }
 
@@ -358,9 +505,11 @@ object LoginEngine {
         val acIp = portal?.acIp ?: ""
         val acName = portal?.acName ?: ""
 
+        val srcLabel = if (portal != null) "门户重定向" else "本机兜底"
         LogStore.log(
             ctx, "INFO",
-            "登录参数: ip=$userIp mac=$userMac acIp=${acIp.ifEmpty { "(空)" }} acName=${acName.ifEmpty { "(空)" }}"
+            "登录参数(来源=$srcLabel): ip=$userIp mac=$userMac " +
+                "acIp=${acIp.ifEmpty { "(空)" }} acName=${acName.ifEmpty { "(空)" }}"
         )
         LogStore.log(ctx, "INFO", "正在登录 ${cfg.account}${cfg.suffix} ...")
 

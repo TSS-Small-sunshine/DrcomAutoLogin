@@ -41,7 +41,7 @@
 | ViewBinding | 启用（`buildFeatures { viewBinding = true }`） |
 | release 混淆 | 关闭（`isMinifyEnabled = false`） |
 | namespace / applicationId | `com.drcom.autologin` |
-| 版本号 | `versionName "1.2"` / `versionCode 3` |
+| 版本号 | `versionName "1.3"` / `versionCode 4` |
 
 ### 依赖（共 5 个，无其它）
 
