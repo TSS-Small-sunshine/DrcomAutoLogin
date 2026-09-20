@@ -5,6 +5,9 @@ on:
     branches: [ main, master ]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -28,34 +31,109 @@ jobs:
           test -s "$RUNNER_TEMP/drcom-release.p12"
           echo "keystore decoded: $(stat -c%s "$RUNNER_TEMP/drcom-release.p12") bytes"
 
-      - name: Build signed release APK
-        env:
-          SIGNING_KEYSTORE_PATH: ${{ runner.temp }}/drcom-release.p12
-          SIGNING_STORE_PASSWORD: ${{ secrets.SIGNING_STORE_PASSWORD }}
-          SIGNING_KEY_ALIAS: ${{ secrets.SIGNING_KEY_ALIAS }}
-          SIGNING_KEY_PASSWORD: ${{ secrets.SIGNING_KEY_PASSWORD }}
+      # 不传签名相关环境变量 -> AGP 产出未签名包，交由下一步 apksigner 显式签名。
+      # 原因：AGP 在 minSdk >= 24 时会忽略 enableV1Signing，导致 APK 只有 v2/v3，
+      #       部分国产 ROM 的包解析器会因此报「解析软件包时出现问题 / packageInfo is null」。
+      - name: Build unsigned release APK
         run: gradle assembleRelease --no-daemon --stacktrace
+
+      - name: Sign APK with v1 + v2 + v3
+        env:
+          KS_PATH: ${{ runner.temp }}/drcom-release.p12
+          KS_PASS: ${{ secrets.SIGNING_STORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.SIGNING_KEY_ALIAS }}
+          KEY_PASS: ${{ secrets.SIGNING_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          BT=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
+          echo "build-tools: $BT"
+
+          IN=$(ls app/build/outputs/apk/release/*unsigned*.apk 2>/dev/null | head -1 || true)
+          if [ -z "$IN" ]; then IN=$(ls app/build/outputs/apk/release/*.apk | head -1); fi
+          echo "unsigned input: $IN"
+
+          OUT=app/build/outputs/apk/release/DrcomAutoLogin-debug.apk
+
+          "$BT/zipalign" -f -p 4 "$IN" "$RUNNER_TEMP/aligned.apk"
+
+          "$BT/apksigner" sign \
+            --ks "$KS_PATH" \
+            --ks-pass "pass:$KS_PASS" \
+            --ks-key-alias "$KEY_ALIAS" \
+            --key-pass "pass:$KEY_PASS" \
+            --v1-signing-enabled true \
+            --v2-signing-enabled true \
+            --v3-signing-enabled true \
+            --out "$OUT" \
+            "$RUNNER_TEMP/aligned.apk"
+
+          echo "signed -> $OUT"
 
       - name: Verify APK (signature + manifest)
         run: |
-          set -e
-          APK=$(ls app/build/outputs/apk/release/*.apk | head -1)
-          echo "=== APK: $APK ==="
+          set -euo pipefail
+          APK=app/build/outputs/apk/release/DrcomAutoLogin-debug.apk
           BT=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
-          echo "=== build-tools: $BT ==="
-          echo ""
-          echo "=== apksigner verify (必须 v1/v2/v3 全为 true) ==="
+
+          echo "=== apksigner verify（v1/v2/v3 必须全为 true）==="
           "$BT/apksigner" verify --verbose --print-certs "$APK"
+
           echo ""
-          echo "=== aapt2 badging (包名 / minSdk / targetSdk) ==="
+          echo "=== v1 签名文件（必须存在，否则脚本失败）==="
+          # 先落盘再 grep：`unzip -l | grep -q` 在 set -o pipefail 下会因 grep 提前退出、
+          # unzip 收到 SIGPIPE（exit 141）而误报 MISSING。
+          unzip -l "$APK" > "$RUNNER_TEMP/apk-entrylist.txt"
+          for f in META-INF/MANIFEST.MF META-INF/CERT.SF META-INF/CERT.RSA; do
+            grep -q "$f" "$RUNNER_TEMP/apk-entrylist.txt" && echo "  OK  $f" || { echo "  MISSING $f"; exit 1; }
+          done
+
+          echo ""
+          echo "=== aapt2 badging ==="
           "$BT/aapt2" dump badging "$APK" | head -12
+
           echo ""
           echo "=== sha256 ==="
           sha256sum "$APK"
 
-      - name: Upload APK
+      - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: DrcomAutoLogin-APK
-          path: app/build/outputs/apk/release/*.apk
+          path: app/build/outputs/apk/release/DrcomAutoLogin-debug.apk
           if-no-files-found: error
+
+      - name: Publish Release (tag debug)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          APK=app/build/outputs/apk/release/DrcomAutoLogin-debug.apk
+
+          NOTES="自动构建的 **Debug 版** APK（正式 release 签名，签名方案 v1 + v2 + v3）。
+
+          | 项 | 值 |
+          | --- | --- |
+          | 包名 | \`com.drcom.autologin\` |
+          | 版本 | 1.0 (versionCode 1) |
+          | 系统要求 | Android 8.0 (API 26) 及以上 |
+          | 签名方案 | v1 (JAR) + v2 + v3 |
+          | 构建提交 | \`${{ github.sha }}\` |
+          | 构建编号 | #${{ github.run_number }} |
+
+          **安装**：直接下载下面的 \`DrcomAutoLogin-debug.apk\`，传到手机安装（需允许「安装未知应用」）。
+
+          > 本 Release 每次推送代码后由 CI 自动覆盖更新，下载链接固定不变。"
+
+          # 先删旧 Release（含 tag），保证 tag 指向最新提交
+          if gh release view debug >/dev/null 2>&1; then
+            gh release delete debug --yes --cleanup-tag
+          fi
+
+          gh release create debug "$APK" \
+            --title "Debug 构建（自动更新）" \
+            --notes "$NOTES" \
+            --prerelease \
+            --target "$GITHUB_SHA"
+
+          echo "=== Release 已发布 ==="
+          gh release view debug --json url,tagName,name,isPrerelease,assets

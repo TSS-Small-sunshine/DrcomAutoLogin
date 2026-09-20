@@ -34,10 +34,10 @@ android {
                 keyAlias = System.getenv("SIGNING_KEY_ALIAS")
                 keyPassword = System.getenv("SIGNING_KEY_PASSWORD")
                 storeType = "PKCS12"
-                // 关键：同时启用 v1 / v2 / v3。
-                // 只签 v2 时，部分国产 ROM 的包解析器会返回 packageInfo is null → 报「解析软件包时出现问题」。
-                // v1（JAR 签名）兼容性最好，保留它没有任何副作用（仅增加约 1KB）。
-                enableV1Signing = true
+                // 说明：AGP 在 minSdk >= 24 时会忽略 enableV1Signing，
+                // 因此 CI 不依赖这里的签名配置，而是由 workflow 里的 apksigner
+                // 显式以 --v1-signing-enabled true 签名（v1 + v2 + v3）。
+                // 这里的配置只用于「本地带环境变量构建时」的兜底。
                 enableV2Signing = true
                 enableV3Signing = true
             }

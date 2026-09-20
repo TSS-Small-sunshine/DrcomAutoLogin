@@ -55,16 +55,19 @@ on:
 runs-on: ubuntu-latest
 ```
 
-用一台全新的 Ubuntu 云主机，每次都是干净环境。接着按顺序做 6 件事：
+用一台全新的 Ubuntu 云主机，每次都是干净环境。接着按顺序做 9 件事：
 
 | 步骤 | 作用 |
 | --- | --- |
 | `actions/checkout@v4` | 把你的仓库代码下载到编译机上 |
-| `actions/setup-java@v4`（temurin, 17） | 装 JDK 17（Android Gradle Plugin 8.5.2 要求至少 JDK 17） |
-| `gradle/actions/setup-gradle@v4`（8.9） | 装 Gradle 8.9 并开启依赖缓存 |
+| `Set up JDK 17` → `actions/setup-java@v4`（temurin, 17） | 装 JDK 17（Android Gradle Plugin 8.5.2 要求至少 JDK 17） |
+| `Set up Gradle` → `gradle/actions/setup-gradle@v4`（8.9） | 装 Gradle 8.9 并开启依赖缓存 |
 | `Decode signing keystore` | 把 Secrets 里的密钥库（base64）解码成临时文件，供签名使用 |
-| `gradle assembleRelease --no-daemon --stacktrace` | **真正开始编译（并签名）** |
-| `Verify APK` | 打印 APK 的签名方案（`apksigner verify`）与包信息（`aapt2 dump badging`），确认产物正确 |
+| `Build unsigned release APK` | **真正开始编译**：`gradle assembleRelease --no-daemon --stacktrace`，产出**未签名**包 |
+| `Sign APK with v1 + v2 + v3` | 先用 `zipalign` 对齐，再由 `apksigner` 显式以 v1 + v2 + v3 签名，输出 `DrcomAutoLogin-debug.apk` |
+| `Verify APK (signature + manifest)` | 打印 APK 的签名方案（`apksigner verify`）、检查 v1 签名文件是否齐全、打印包信息（`aapt2 dump badging`），确认产物正确 |
+| `Upload APK artifact` | 把签名后的 `DrcomAutoLogin-debug.apk` 上传为 artifact |
+| `Publish Release (tag debug)` | 用 `gh release` 删除并重建 tag 为 `debug` 的 Release，附件即该 APK |
 
 > `--no-daemon`：编译机只用一次，不需要常驻进程，关掉更快更省内存。
 > `--stacktrace`：万一失败，日志里会带完整调用栈，方便排错。
@@ -72,15 +75,17 @@ runs-on: ubuntu-latest
 ### 3）编译结果怎么给你
 
 ```yaml
-- name: Upload APK
+- name: Upload APK artifact
   uses: actions/upload-artifact@v4
   with:
     name: DrcomAutoLogin-APK
-    path: app/build/outputs/apk/release/*.apk
+    path: app/build/outputs/apk/release/DrcomAutoLogin-debug.apk
     if-no-files-found: error
 ```
 
-编译成功后，把 `app/build/outputs/apk/release/` 下的 `.apk` 文件打包成一个名为 **`DrcomAutoLogin-APK`** 的 artifact（可以理解为「云端产物压缩包」）供你下载。
+编译成功后，把 `app/build/outputs/apk/release/DrcomAutoLogin-debug.apk` 打包成一个名为 **`DrcomAutoLogin-APK`** 的 artifact（可以理解为「云端产物压缩包」）供你下载。
+
+最后还有一步 `Publish Release (tag debug)`：它用 `gh release` 把同一个 `DrcomAutoLogin-debug.apk` 挂到 tag 为 **`debug`** 的 Release 上（先删旧 Release 再重建，所以下载链接固定不变），并带上 `--prerelease` 标记。也就是说 **Actions artifact 里解压出的文件，和 Releases 里的附件是同一个文件、同名同内容**。
 
 `if-no-files-found: error` 的意思是：**如果没找到 apk 就直接报错**。这是故意的——防止编译其实失败了、却悄悄给你一个空的下载包。
 
@@ -108,13 +113,15 @@ runs-on: ubuntu-latest
 
 ```
 Set up job
-✓ Checkout                ← 下载你的代码
-✓ Set up JDK 17           ← 装 JDK
-✓ Set up Gradle           ← 装 Gradle
-✓ Decode signing keystore ← 解码签名密钥库
-✓ Build release APK       ← 编译并签名（耗时最久的一步）
-✓ Verify APK              ← 校验签名方案与包信息
-✓ Upload APK              ← 上传结果
+✓ Checkout                    ← 下载你的代码
+✓ Set up JDK 17               ← 装 JDK
+✓ Set up Gradle               ← 装 Gradle
+✓ Decode signing keystore     ← 解码签名密钥库
+✓ Build unsigned release APK  ← 编译出未签名包（耗时最久的一步）
+✓ Sign APK with v1 + v2 + v3  ← zipalign + apksigner 显式签 v1/v2/v3
+✓ Verify APK (signature + manifest) ← 校验签名方案、v1 签名文件与包信息
+✓ Upload APK artifact         ← 上传结果
+✓ Publish Release (tag debug) ← 更新 tag 为 debug 的 Release
 ✓ Complete job
 ```
 
@@ -122,29 +129,58 @@ Set up job
 - **黄色转圈 🟡**：这一步正在跑。
 - **红色叉 ❌**：这一步失败，点它展开可以看到详细报错。
 
-想看点开某一步的日志，直接点那一步的名字即可。排错时最需要看的是 **`Build release APK`** 这一步的输出；想要签名与 SDK 版本的证据，看 **`Verify APK`** 那一步。
+想看点开某一步的日志，直接点那一步的名字即可。排错时最需要看的是 **`Build unsigned release APK`** 这一步的输出；想要签名与 SDK 版本的证据，看 **`Verify APK (signature + manifest)`** 那一步。
 
 ---
 
-## 五、怎么下载 APK
+## 五、最省事：直接从 Releases 下载
+
+不想点开 `Actions` 页面翻产物，可以直接用 **Releases**：
+
+1. 打开 <https://github.com/TSS-Small-sunshine/DrcomAutoLogin/releases>。
+2. 找到标签为 **`debug`** 的 Release（标题是「Debug 构建（自动更新）」）。
+3. 在 `Assets` 区域下载附件 **`DrcomAutoLogin-debug.apk`**。
+4. 把 APK 传到手机安装（需按提示允许「安装未知应用」）。
+
+关于这个 Release：
+
+| 项 | 值 |
+| --- | --- |
+| tag | **`debug`**（固定不变） |
+| 附件名 | **`DrcomAutoLogin-debug.apk`** |
+| 更新方式 | 每次向 `main` / `master` 推送代码后，CI 自动删除并重建该 Release，**下载链接始终不变** |
+| 是否需要登录 GitHub | **不需要**，链接可直接分享给同学 |
+
+> 注意：这里说的「Debug 版」指的是「给同学用的临时分发版本」，**签名仍然是 release 正式签名**（v1 + v2 + v3），不是 Android 默认的 debug 签名。
+
+---
+
+## 六、怎么下载 APK
 
 1. 进入那次**成功（绿色 ✅）**的运行记录页面。
 2. 拉到页面**最底部**，找到 **`Artifacts`** 区块。
 3. 点 **`DrcomAutoLogin-APK`**。
 4. 浏览器会下载一个 **zip 压缩包**。
-5. 解压这个 zip，得到 **`app-release.apk`** ——这就是能装到手机上的安装包。
+5. 解压这个 zip，得到 **`DrcomAutoLogin-debug.apk`** ——这就是能装到手机上的安装包。
+
+> **artifact 里的文件名和 Releases 里的一样吗？**
+> 一样。`Upload APK artifact` 和 `Publish Release (tag debug)` 用的是同一个文件 `DrcomAutoLogin-debug.apk`：Actions 的 artifact 里解压出来是它，Releases 里 `debug` 那个 Release 的附件也是它，**同名、同内容**（可以互相校验 `sha256`）。所以从哪边下载都行，装出来的 App 完全一致。
 
 > **这是正式签名的包吗？**
 > 是。CI 产出的是 **release 正式签名**包，同时启用了 **v1（JAR）+ v2 + v3** 三种签名方案。第三方来源侧载安装时 v1 签名是兼容性兜底——只签 v2 的包在部分国产 ROM 上会被包解析器拒绝，报「解析软件包时出现问题 / packageInfo is null」。
 >
-> **为什么文件名是 `app-release.apk` 而不是中文名？**
-> Android 打包规则规定产物名来自模块名（`app`）和构建类型（`release`）。安装到手机后显示的名称才是「Dr.COM 校园网自动登录」。
+> **v1 签名是怎么保证的？**
+> 因为 **AGP 在 `minSdk >= 24` 时会忽略 `enableV1Signing`**（AGP 认为 v1 冗余），所以 CI 不依赖 Gradle 的签名配置：先由 `gradle assembleRelease` 产出**未签名**包 → `zipalign` 对齐 → 再由 `apksigner` 显式以 `--v1-signing-enabled true --v2-signing-enabled true --v3-signing-enabled true` 签名，产物即为 `DrcomAutoLogin-debug.apk`。
+>
+> **为什么文件名是 `DrcomAutoLogin-debug.apk` 而不是中文名？**
+> 这个名字是 CI 在 **`Sign APK with v1 + v2 + v3`** 这一步用 `apksigner --out` 显式指定的（Gradle 在 `app/build/outputs/apk/release/` 下产出的 `*-unsigned.apk` 只是签名前的中间产物，不会上传）。安装到手机后显示的名称才是「Dr.COM 校园网自动登录」；这里的 `debug` 指的是「给同学用的临时分发版」，签名本身仍是 release 正式签名。
 
 ### 怎么确认这个 APK 签名正常
 
-`Verify APK` 这一步会把两样东西打印到日志里，可以直接当证据看：
+`Verify APK (signature + manifest)` 这一步会把下面这些证据打印到日志里，可以直接当证据看：
 
 - **`apksigner verify --verbose --print-certs`**：列出签名方案，**v1 / v2 / v3 三项都应是 `true`**，并打印证书主体（`CN=TSS-Small-sunshine, OU=DrcomAutoLogin, ...`）。
+- **v1 签名文件存在性检查**：脚本会逐个检查 APK 内是否含 `META-INF/MANIFEST.MF`、`META-INF/CERT.SF`、`META-INF/CERT.RSA`；**缺任意一个，这一步会直接失败**（红色 ❌），不会再产出一个「只有 v2/v3」的包。
 - **`aapt2 dump badging`**：打印包名 `com.drcom.autologin` 与 `sdkVersion`（`minSdk`）/ `targetSdkVersion`。
 
 再往下还有一行 `sha256`，是这次产物 APK 的校验值。
@@ -155,11 +191,11 @@ GitHub 的 artifact 默认**保留 90 天**，过期后链接失效。解决办�
 
 ---
 
-## 六、构建失败怎么办
+## 七、构建失败怎么办
 
 红色 ❌ 时，先点进失败的那一步看日志。下面是几种最常见的情况。
 
-### 情况 1：卡在 `Set up Gradle` 或 `Build release APK`，日志里有 `timeout` / `Connection timed out` / `Could not resolve`
+### 情况 1：卡在 `Set up Gradle` 或 `Build unsigned release APK`，日志里有 `timeout` / `Connection timed out` / `Could not resolve`
 
 **原因**：编译机在下载 Gradle 或 Android 依赖时网络超时。这是 GitHub 服务器到 Maven 仓库之间的偶发网络问题，不是你代码的问题。
 
@@ -190,7 +226,7 @@ GitHub 的 artifact 默认**保留 90 天**，过期后链接失效。解决办�
 **处理**：
 
 1. 先重跑一次（下载中断很常见）。
-2. 持续失败时，可以在 `Build release APK` 步骤**之前**加一步显式安装 SDK 组件：
+2. 持续失败时，可以在 `Build unsigned release APK` 步骤**之前**加一步显式安装 SDK 组件：
 
    ```yaml
    - name: Set up Android SDK
@@ -199,13 +235,13 @@ GitHub 的 artifact 默认**保留 90 天**，过期后链接失效。解决办�
 
    （`ubuntu-latest` 镜像本身就预装了 Android SDK，所以正常情况不需要这一步。）
 
-### 情况 5：`No files were found with the provided path: app/build/outputs/apk/release/*.apk`
+### 情况 5：`No files were found with the provided path: app/build/outputs/apk/release/DrcomAutoLogin-debug.apk`
 
-**原因**：`Upload APK` 报这个错，说明**编译其实没产出 apk**。往上翻，真正的错误在 `Build release APK` 那一步，通常是 Kotlin 语法错误或资源文件错误。
+**原因**：`Upload APK artifact` 报这个错，说明**签名那一步没产出 apk**（`Build unsigned release APK` 或 `Sign APK with v1 + v2 + v3` 的某一步先失败了）。往上翻，真正的错误通常在 `Build unsigned release APK` 那一步，一般是 Kotlin 语法错误或资源文件错误。
 
 **处理**：
 
-1. 点开 `Build release APK` 步骤，看日志里第一处 `e: ` 或 `error:` 开头的行（那才是根因）。
+1. 点开 `Build unsigned release APK` 步骤，看日志里第一处 `e: ` 或 `error:` 开头的行（那才是根因）。
 2. 如果你改过代码，把改动还原；如果没改过，直接重跑。
 
 ### 情况 6：`Actions` 页面根本没有 `Build APK` 这个 workflow
@@ -227,14 +263,14 @@ GitHub 的 artifact 默认**保留 90 天**，过期后链接失效。解决办�
 
 ---
 
-## 七、改了代码怎么更新 App
+## 八、改了代码怎么更新 App
 
 流程和第一次完全一样：
 
 1. 修改源码（在网页上直接编辑，或用 GitHub Desktop / git 命令行 push）。
 2. `Commit changes` / `push` 到 `main` 分支。
 3. 等 `Actions` 自动编译完成。
-4. 下载新的 `DrcomAutoLogin-APK`，解压得到 `app-release.apk`。
+4. 下载新的 `DrcomAutoLogin-APK`，解压得到 `DrcomAutoLogin-debug.apk`。
 5. 直接把新的 apk 覆盖安装到手机上。
 
 **覆盖安装的数据保留情况**：
@@ -257,7 +293,7 @@ GitHub 的 artifact 默认**保留 90 天**，过期后链接失效。解决办�
 
 ---
 
-## 八、常见疑问
+## 九、常见疑问
 
 **Q：编译要花钱吗？**
 A：公开仓库（Public）的 Actions 完全免费不限额；私有仓库（Private）免费额度一般是每月 2000 分钟，本工程一次编译只花 3-5 分钟，日常更新完全够用。

@@ -60,9 +60,10 @@
 | 平台 | GitHub Actions（`.github/workflows/build-apk.yml`） |
 | 触发条件 | push 到 `main` / `master`；也支持 `workflow_dispatch` 手动触发 |
 | Runner | `ubuntu-latest` |
-| 步骤 | `actions/checkout@v4` → `actions/setup-java@v4`（temurin 17）→ `gradle/actions/setup-gradle@v4`（Gradle 8.9）→ **Decode signing keystore**（把 `SIGNING_KEYSTORE_BASE64` 解码成临时密钥库）→ `gradle assembleRelease --no-daemon --stacktrace` → **Verify APK**（`apksigner verify --verbose --print-certs` + `aapt2 dump badging`）→ `actions/upload-artifact@v4` |
+| 步骤（共 9 步） | `actions/checkout@v4` → `actions/setup-java@v4`（temurin 17）→ `gradle/actions/setup-gradle@v4`（Gradle 8.9）→ **Decode signing keystore**（把 `SIGNING_KEYSTORE_BASE64` 解码成临时密钥库）→ **Build unsigned release APK**（`gradle assembleRelease --no-daemon --stacktrace`，产出**未签名**包）→ **Sign APK with v1 + v2 + v3**（`zipalign` 对齐后用 `apksigner` 显式启用 v1+v2+v3 签名）→ **Verify APK**（签名 + manifest：`apksigner verify --verbose --print-certs`、v1 签名文件存在性检查、`aapt2 dump badging`）→ **Upload APK artifact**（`actions/upload-artifact@v4`）→ **Publish Release (tag debug)**（`gh release`，tag 固定 `debug`，带 `--prerelease`） |
 | Artifact 名 | **`DrcomAutoLogin-APK`** |
-| 产物路径 | **`app/build/outputs/apk/release/app-release.apk`** |
+| 产物路径 | **`app/build/outputs/apk/release/DrcomAutoLogin-debug.apk`** |
+| GitHub Release | tag **`debug`**，标题「Debug 构建（自动更新）」，附件同为 `DrcomAutoLogin-debug.apk`，每次推送自动覆盖重建 |
 | 实测构建耗时 | 约 **1 分 20 秒**（首次含依赖下载约 2-3 分钟） |
 
 ### 签名
@@ -76,6 +77,8 @@
 | 凭据来源 | GitHub Actions Secrets（仓库内不含任何密钥材料） |
 
 > 为什么同时开 v1：只签 v2 的 APK 在部分国产 ROM 上会被包解析器拒绝，报「解析软件包时出现问题 / packageInfo is null」。v1 兼容性最好，保留它没有副作用。
+>
+> 实现说明：AGP 在 `minSdk >= 24` 时会忽略 `enableV1Signing`，因此 CI 先用 Gradle 产出未签名包，再由 `apksigner` 显式以 `--v1-signing-enabled true` 签名。
 
 ### 其它实现要点
 
@@ -200,9 +203,15 @@ android/
 
 ## 快速开始
 
-### 路径 A：直接用现成 APK（不写代码）
+### 路径 0：直接从 Releases 下载（最省事，推荐）
 
-1. 打开仓库的 `Actions` 标签页 → 点进 `Build APK` 任务 → 拉到页面底部 `Artifacts` 区域 → 下载 **`DrcomAutoLogin-APK`**（得到 zip，解压出 `app-release.apk`）。
+打开 <https://github.com/TSS-Small-sunshine/DrcomAutoLogin/releases> → 找到标签为 **`debug`** 的 Release（标题「Debug 构建（自动更新）」）→ 下载附件 **`DrcomAutoLogin-debug.apk`** → 传到手机安装。
+
+> 这个 Release 由 CI 在每次推送后自动覆盖更新，**下载链接固定不变**，不需要登录 GitHub。
+
+### 路径 A：从 Actions 产物下载
+
+1. 打开仓库的 `Actions` 标签页 → 点进 `Build APK` 任务 → 拉到页面底部 `Artifacts` 区域 → 下载 **`DrcomAutoLogin-APK`**（得到 zip，解压出 **`DrcomAutoLogin-debug.apk`**，与 Releases 里那个附件同名同内容）。
 2. 把 APK 传到手机安装（需按提示允许「安装未知应用」）。
 3. 打开 App，填上网账号 / 密码 / 运营商，点「保存配置」→ 点「立即登录」验证。
 4. 打开「自动检查」，然后按 [02 - 国产 ROM 保活指引](docs/02-国产ROM保活指引.md) 配好自启动与省电白名单。
