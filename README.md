@@ -1,151 +1,298 @@
-# Dr.COM 校园网自动登录（安卓版）
+# Dr.COM 校园网自动登录（Android）
 
-这是**安卓手机上的校园网自动登录 App**。装到手机上以后，只要连着校园 WiFi，它就会在后台定时检查你有没有掉线，一旦掉线就自动帮你重新登录，不用再手动打开认证页面。
+一个**零第三方依赖**的安卓 App：只要连着校园 WiFi，它就在后台定时检查你是否掉线，一旦掉线自动重新认证，不必再手动打开认证页面。
 
-它和你电脑上装的 Windows 版用的是**同一套 Dr.COM 协议**，两边可以同时用、互不干扰：
-
-- 查在线：`GET http://172.16.80.3/drcom/chkstatus?callback=cb&jsVersion=4.X`
-- 登录：`GET http://172.16.80.3:801/eportal/portal/login?...`
-
-> **给完全不懂技术的同学**：你不需要会写代码，也不需要在自己电脑上装任何开发工具。跟着下面「快速开始」的 5 步做完，就能把 App 装到手机上。
+> ## ⚠️ 适用范围声明（请先读这一段）
+>
+> **本项目的默认配置与全部实测验证，均在「福建农业职业技术学院」校园网完成。**
+>
+> - 默认网关 `172.16.80.3`、认证端口 `801`、运营商后缀规则（`@yd` / `@dx` / `@lt`）**都是该校环境的实测结果**。
+> - **其它学校**：网关地址、端口、甚至认证协议版本都可能不同，需要你自己确认后修改配置；**本项目不保证在这些学校可用**。
+> - 因此本项目的价值，主要是提供**同一套 Dr.COM 认证协议的一份可运行实现参考**——协议流程、参数与坑点都写在下方文档里，换环境照着改 `Config.kt` 的默认值即可。
 
 ---
 
-## 快速开始（5 步）
+## 功能特性
 
-### 第 1 步：把 `android` 目录里的内容传到一个 GitHub 仓库
+- **自动检查 + 自动重登**：WorkManager 周期任务定时查在线状态，掉线立即重新认证
+- **开机自启**：开机 / 应用更新后自动恢复任务，不需要手动打开 App
+- **国产 ROM 保活**：前台服务 + 常驻通知 + 网络变化回调，配合自启动白名单
+- **SSID 过滤**：可指定只在某个校园 WiFi 下生效，避免在家或流量下空跑
+- **内置状态面板与日志**：是否在线、上次检查时间、上次错误一目了然；日志滚动保留最近 200 行
+- **零第三方依赖**：网络、JSON、存储全部使用平台 API，无 OkHttp / Retrofit / Gson
+- **云端自动构建**：推送到 GitHub 即由 Actions 自动产出 APK，本地无需安装 Android SDK
 
-GitHub 是一个免费代码托管网站，它提供**免费的自动编译服务**：你把源码传上去，它帮你在云端打包成能装在手机上的 App（APK 文件）。
+---
 
-三种方式任选一种，**推荐方式 A（网页上传，什么都不用装）**。
+## 技术栈
 
-#### 方式 A：网页上传（最省事，不用装任何东西）
+### 构建与 SDK
 
-1. 打开 <https://github.com/new> 新建一个仓库。
-   - **Repository name**（仓库名）随便填，比如 `drcom-autologin-android`。
-   - **Public（公开）或 Private（私有）都可以**。
-   - ⚠️ **不要**勾选 `Add a README file`（本工程自带 README，勾了会多出一个冲突文件）。
-2. 点 `Create repository`。
-3. 进入这个新建的空仓库，点 `Add file` → `Upload files`。
-4. **把 `android` 目录里的所有内容拖进网页的上传区域**。
-   - ⚠️ 拖的是 `android` 目录**里面的内容**，不是 `android` 这个文件夹本身。
-   - ⚠️ 一定要包含 `.github` 这个目录（它是隐藏目录，看不到就打开 Windows 资源管理器 → `查看` → 勾选 `隐藏的项目`）。**漏了它，自动编译就不会运行。**
-5. 页面下方填写 commit message（随便写，比如 `first commit`），点 `Commit changes`。
+| 项 | 值 |
+| --- | --- |
+| 语言 | **Kotlin 1.9.24** |
+| Android Gradle Plugin | **8.5.2** |
+| Gradle | **8.9**（CI 由 `gradle/actions/setup-gradle@v4` 提供；**仓库内不含 gradle wrapper**） |
+| JDK | **17（Temurin）** |
+| compileSdk | **34**（Android 14） |
+| targetSdk | **34** |
+| minSdk | **26**（Android 8.0） |
+| Java / Kotlin 目标 | **Java 17** |
+| ViewBinding | 启用（`buildFeatures { viewBinding = true }`） |
+| release 混淆 | 关闭（`isMinifyEnabled = false`） |
+| namespace / applicationId | `com.drcom.autologin` |
+| 版本号 | `versionName "1.0"` / `versionCode 1` |
 
-#### 方式 B：GitHub Desktop（图形化客户端）
+### 依赖（共 5 个，无其它）
 
-1. 下载安装 [GitHub Desktop](https://desktop.github.com/) 并登录你的 GitHub 账号。
-2. 菜单 `File` → `Add local repository`…，选择本机的 `android` 目录。
-   - 如果提示「这不是一个 Git 仓库」，选择 `create a repository` 即可。
-3. 点右上角 `Publish repository`，确认仓库名 → 发布。
-4. 注意：发布时**不要**勾选 `Keep this code private` 之外的任何「忽略文件」选项，否则 `.github` 可能被漏掉。
+| 依赖 | 版本 | 用途 |
+| --- | --- | --- |
+| `androidx.core:core-ktx` | **1.13.1** | 核心扩展（`ContextCompat` 等） |
+| `androidx.appcompat:appcompat` | **1.7.0** | Activity 基类、兼容性支持 |
+| `com.google.android.material:material` | **1.12.0** | Material 3 主题、`SwitchMaterial` 等控件 |
+| `androidx.constraintlayout:constraintlayout` | **2.1.4** | 布局 |
+| `androidx.work:work-runtime-ktx` | **2.9.1** | WorkManager 周期任务 |
 
-#### 方式 C：git 命令行（会用命令行的同学）
+### CI/CD
+
+| 项 | 值 |
+| --- | --- |
+| 平台 | GitHub Actions（`.github/workflows/build-apk.yml`） |
+| 触发条件 | push 到 `main` / `master`；也支持 `workflow_dispatch` 手动触发 |
+| Runner | `ubuntu-latest` |
+| 步骤 | `actions/checkout@v4` → `actions/setup-java@v4`（temurin 17）→ `gradle/actions/setup-gradle@v4`（Gradle 8.9）→ `gradle assembleDebug --no-daemon --stacktrace` → `actions/upload-artifact@v4` |
+| Artifact 名 | **`DrcomAutoLogin-APK`** |
+| 产物路径 | **`app/build/outputs/apk/debug/app-debug.apk`** |
+| 实测构建耗时 | 约 **1 分 20 秒**（首次含依赖下载约 2-3 分钟） |
+
+### 其它实现要点
+
+| 项 | 实现方式 |
+| --- | --- |
+| 网络请求 | 平台 `java.net.HttpURLConnection`（**无** OkHttp / Retrofit） |
+| JSON 解析 | Android 内置 `org.json`（**无** Gson / Moshi / kotlinx-serialization） |
+| 数据存储 | 平台 `SharedPreferences` |
+| 日志 | 应用私有目录下的日志文件，滚动保留最近 200 行，线程安全 |
+| 签名 | debug 构建，由 AGP **自动生成的 debug keystore** 签名；采用 **APK Signature Scheme v2**（因 `minSdk 26`，不再生成 v1 的 `META-INF/CERT.RSA`） |
+| 实测 APK | 5.95 MB，896 个 ZIP 条目，含 `AndroidManifest.xml` / `classes.dex` / `resources.arsc` |
+| 明文流量 | 认证全程 HTTP 明文，manifest 已开启 `usesCleartextTraffic="true"` |
+
+---
+
+## 架构说明
+
+### 模块职责
+
+源码共 9 个 Kotlin 文件，全部位于 `app/src/main/java/com/drcom/autologin/`。
+
+| 文件 | 职责 |
+| --- | --- |
+| `Config.kt` | 配置数据类 + 默认值 + 选项常量（运营商、检查间隔） |
+| `Prefs.kt` | `SharedPreferences` 读写配置 + 持久化运行状态 |
+| `LogStore.kt` | 应用私有目录日志文件，滚动保留最近 200 行，线程安全 |
+| `LoginEngine.kt` | **协议核心**：查在线 / 登录 / 本机 IP+MAC 探测 / JSONP 解析 / `runOnce` 完整流程 |
+| `LoginWorker.kt` | WorkManager `Worker`；做 SSID 过滤后调用 `LoginEngine.runOnce`，恒返回 `Result.success()` |
+| `Scheduler.kt` | 注册 / 取消周期任务、触发立即执行 |
+| `BootReceiver.kt` | 接收 `BOOT_COMPLETED` / `MY_PACKAGE_REPLACED` → 注册任务 + 立即检查一次 |
+| `KeepAliveService.kt` | 前台服务（`specialUse` 类型）+ 常驻静默通知 + 网络变化回调 |
+| `MainActivity.kt` | 单页界面：状态面板 + 配置表单 + 日志查看 |
+
+### 触发源 → 执行链路
+
+```text
+开机 / 应用更新 ──┐
+周期任务(15/30/60/120min) ──┤
+WiFi 网络恢复 ──┼──► LoginWorker ──► LoginEngine.runOnce()
+用户点「立即登录」──┘                        │
+                                            ├─► 查在线 (chkstatus)
+                                            ├─► 未在线 → 登录 (portal/login)
+                                            ├─► 写日志 LogStore
+                                            └─► 写状态 Prefs ──► MainActivity 每 2 秒刷新显示
+```
+
+---
+
+## 认证协议
+
+### 1）查在线 —— 端口 80
 
 ```bash
-cd D:\Student_Workstation\Using_Workstation\campus-network-service\android
-git init
-git add .
-git commit -m "Initial commit"
-git branch -M main
-git remote add origin https://github.com/<你的用户名>/<仓库名>.git
-git push -u origin main
+GET http://{HOST}/drcom/chkstatus?callback=cb&jsVersion=4.X
 ```
 
-> ⚠️ **再次提醒**：无论用哪种方式，都必须确保 `.github/workflows/build-apk.yml` 被上传成功，否则 GitHub 不会自动编译。
+```text
+→ cb({"result":1,"uid":"...","v4ip":"192.168.x.x","olmac":"xxxxxxxxxxxx",...})
+```
 
-### 第 2 步：等 GitHub 自动编译
+判断逻辑：
 
-上传完成后：
+- `result == 1` → **已在线**
+- `result == 0` → **未在线**
+- 请求失败 → **网关不可达**（可能不在校园网内）
 
-1. 打开你仓库页面顶部的 `Actions` 标签。
-2. 你会看到一条名为 **`Build APK`** 的任务正在跑（黄色圆点转圈 = 运行中）。
-3. 首次编译大约需要 **3-5 分钟**（第一次要下载依赖，会慢一些）。
-4. 变成绿色对勾 ✅ 就表示成功了。
+### 2）登录 —— 端口 801
 
-如果 Actions 页面是空的、没有任务在跑，说明 `.github` 目录没传上去，请回到第 1 步重传。
-如果编译失败（红色叉 ❌），请看 [编译 APK 文档](docs/01-编译APK.md) 的「构建失败怎么办」章节。
+```bash
+GET http://{HOST}:801/eportal/portal/login
+    ?callback=dr{随机数}
+    &login_method=1
+    &user_account={账号}{运营商后缀}
+    &user_password={密码}
+    &wlan_user_ip={本机IP}
+    &wlan_user_ipv6=
+    &wlan_user_mac={本机MAC}
+    &wlan_ac_ip=
+    &wlan_ac_name=
+    &terminal_type=1
+    &jsVersion=4.1.3
+    &lang=zh-cn
+    &v={随机数}
+```
 
-### 第 3 步：下载编译好的 App
+```text
+→ dr{随机数}({"result":1,"msg":"...","ret_code":0})
+```
 
-1. 在 `Actions` 页面点进刚才那次 `Build APK` 任务。
-2. 拉到页面**最底部**，找到 `Artifacts` 区域。
-3. 点击 **`DrcomAutoLogin-APK`** 下载（会得到一个 zip 压缩包）。
-4. 解压这个 zip，里面就是安装包 **`app-debug.apk`**。
+判断逻辑：`result == 1` → **登录成功**。
 
-> 提示：这个下载链接有效期大约 90 天，过期后重新点一次 `Run workflow` 再编译一次即可。
+### 要点
 
-### 第 4 步：传到手机并安装
-
-1. 用数据线、微信文件传输助手、QQ、网盘等**任意方式**把 `app-debug.apk` 传到手机。
-2. 在手机上点开这个 apk 文件。
-3. 系统会提示「**不允许安装未知来源应用**」之类的信息，按提示进入设置，允许你当前用的文件管理器 / 浏览器「**安装未知应用**」。
-   - 大致路径：`设置` → `应用` → `特殊应用权限`（不同品牌叫法不同）→ `安装未知应用` → 找到你用来打开 apk 的那个 App → 打开开关。
-4. 返回继续安装。如果弹「**Play 保护机制/安全检测**」提示，选择「仍要安装」。
-5. 安装完成后，桌面/应用列表会出现一个蓝色图标，名字是 **`Dr.COM 校园网自动登录`**。
-
-### 第 5 步：打开 App 填配置
-
-1. 打开 App。**第一次打开会弹通知权限**（Android 13 及以上），点「**允许**」。
-2. 在「账号配置」区域填写：
-   - **认证服务器**：默认 `172.16.80.3`（不用改）
-   - **端口**：默认 `801`（不用改）
-   - **上网账号**：你的学号或手机号（**不要**自己加 `@yd` 之类后缀）
-   - **运营商**：按你的账号类型选（校园用户 / 移动 @yd / 电信 @dx / 联通 @lt），**选错会登录失败**
-   - **密码**：你的上网密码
-3. 点「**保存配置**」。
-4. 点「**立即登录**」验证一下能不能登上去，看「连接状态」区域是否变成「已在线」。
-5. 打开「**自动检查**」开关，检查间隔选 `30 分钟`（或你想要的值）。
-6. 打开「**常驻通知保活**」开关，通知栏会出现一条「Dr.COM 自动登录」的常驻通知（这是正常的，是它在守护）。
-7. 点「**打开电池优化设置**」，把本 App 设为「**不优化**」。
-8. **最后一步（国产手机必做）**：按你的手机品牌，照着 [国产 ROM 保活指引](docs/02-国产ROM保活指引.md) 把自启动、省电策略配好。**不做这一步，App 过一会儿就会被系统杀掉，自动化就失效了。**
+- **运营商后缀拼在 `user_account` 里**：移动 `@yd` / 电信 `@dx` / 联通 `@lt` / 空 = 校园用户。
+- `login_method=1`、`terminal_type=1`、`jsVersion=4.1.3` 是**固定必填**，缺任意一个都会认证失败（实测）。
+- **IP / MAC 探测**：本机 IP 优先从 `chkstatus` 响应的 `v4ip` 取，失败则用 `DatagramSocket` connect 到网关后读 `localAddress`；MAC 优先取 `olmac`，失败则用占位 `000000000000`。
+- 全程 **HTTP 明文**（Android 9+ 需要 `usesCleartextTraffic="true"`，本工程已开启）。
 
 ---
 
-## 目录结构说明
+## 目录结构
 
-```
+```text
 android/
-├── .github/workflows/build-apk.yml   ← 自动编译脚本（最重要，别漏传）
+├── .github/workflows/build-apk.yml   # GitHub Actions 自动编译脚本（最重要，别漏传）
 ├── app/
-│   ├── build.gradle.kts              ← App 编译配置（包名、版本号）
-│   ├── proguard-rules.pro
+│   ├── build.gradle.kts              # App 构建配置：包名、SDK 版本、依赖
+│   ├── proguard-rules.pro            # 混淆规则（release 未启用混淆）
 │   └── src/main/
-│       ├── AndroidManifest.xml        ← 权限声明（网络、开机自启、通知、定位）
-│       ├── java/com/drcom/autologin/  ← 程序源码
-│       └── res/                       ← 界面文字、颜色、图标
-├── build.gradle.kts
-├── settings.gradle.kts
-├── gradle.properties
+│       ├── AndroidManifest.xml        # 权限与组件声明（网络 / 开机自启 / 通知 / 定位 / 前台服务）
+│       ├── java/com/drcom/autologin/  # 9 个 Kotlin 源文件（见「架构说明」）
+│       └── res/                       # 界面布局、文案、颜色、图标
+├── build.gradle.kts                  # 顶层：AGP 8.5.2 + Kotlin 1.9.24
+├── settings.gradle.kts               # 仓库源与模块声明
+├── gradle.properties                 # JVM 参数等
 ├── .gitignore
-├── README.md                          ← 本文件
-└── docs/                              ← 详细文档
+├── README.md                         # 本文件
+└── docs/                             # 详细文档（编译 / 保活 / 排错）
 ```
-
-## 关键信息速查
-
-| 项目 | 值 |
-| --- | --- |
-| 应用名 | `Dr.COM 校园网自动登录` |
-| 包名 | `com.drcom.autologin` |
-| 版本 | `1.0`（versionCode 1） |
-| 系统要求 | Android 8.0（API 26）及以上 |
-| 编译产物路径 | `app/build/outputs/apk/debug/app-debug.apk` |
-| CI artifact 名称 | `DrcomAutoLogin-APK` |
-| 自动编译触发条件 | push 到 `main` 或 `master` 分支（也可手动 `Run workflow`） |
 
 ---
 
-## 详细文档
+## 快速开始
 
-| 文档 | 内容 | 什么时候看 |
+### 路径 A：直接用现成 APK（不写代码）
+
+1. 打开仓库的 `Actions` 标签页 → 点进 `Build APK` 任务 → 拉到页面底部 `Artifacts` 区域 → 下载 **`DrcomAutoLogin-APK`**（得到 zip，解压出 `app-debug.apk`）。
+2. 把 APK 传到手机安装（需按提示允许「安装未知应用」）。
+3. 打开 App，填上网账号 / 密码 / 运营商，点「保存配置」→ 点「立即登录」验证。
+4. 打开「自动检查」，然后按 [02 - 国产 ROM 保活指引](docs/02-国产ROM保活指引.md) 配好自启动与省电白名单。
+
+> Artifact 下载链接有效期约 90 天，过期后到 `Actions` 点一次 `Run workflow` 重新编译即可。安装、权限、界面各项含义见 [03 - 使用与排错](docs/03-使用与排错.md)。
+
+### 路径 B：自己编译（把源码推到自己的 GitHub 仓库）
+
+1. 在 GitHub 新建一个空仓库（**不要**勾选 `Add a README file`，避免冲突文件）。
+2. 把 `android` 目录**里面的内容**推上去，三种方式任选：
+   - **网页上传**：进入空仓库 → `Add file` → `Upload files`，把内容拖进上传区。⚠️ 必须包含隐藏目录 `.github`，否则自动编译不会运行。
+   - **GitHub Desktop**：`File` → `Add local repository` → 选择 `android` 目录 → `Publish repository`。
+   - **git 命令行**：
+     ```bash
+     cd <android 目录>
+     git init
+     git add .
+     git commit -m "Initial commit"
+     git branch -M main
+     git remote add origin https://github.com/<你的用户名>/<仓库名>.git
+     git push -u origin main
+     ```
+3. 推送后 GitHub Actions 自动开始编译（可在 `Actions` 标签页看进度）。
+4. 编译完成后，按「路径 A」第 1 步下载 APK。
+
+> ⚠️ 无论用哪种方式，都必须确保 `.github/workflows/build-apk.yml` 上传成功，否则不会有自动编译。完整流程与「构建失败怎么办」见 [01 - 编译 APK](docs/01-编译APK.md)。
+
+---
+
+## 配置项说明
+
+| 字段 | 默认值 | 说明 |
 | --- | --- | --- |
-| [01 - 编译 APK](docs/01-编译APK.md) | 怎么让 GitHub 帮你打包、怎么下载、构建失败怎么办 | 第 2、3 步卡住时 |
-| [02 - 国产 ROM 保活指引](docs/02-国产ROM保活指引.md) | 小米/华为/OPPO/vivo 等手机的后台保活设置（**最重要**） | 装好 App 之后的必做一步 |
-| [03 - 使用与排错](docs/03-使用与排错.md) | 界面每个选项什么意思、登录失败怎么查 | 用起来之后遇到问题 |
+| 认证服务器 | `172.16.80.3` | 校园网关地址 |
+| 端口 | `801` | 认证端口 |
+| 上网账号 | 空 | 学号 / 手机号，**不带**运营商后缀 |
+| 运营商 | 校园用户 | 校园用户（无后缀）/ 移动 `@yd` / 电信 `@dx` / 联通 `@lt` |
+| 密码 | 空 | 上网密码 |
+| 自动检查 | 开 | 是否启用周期任务 |
+| 检查间隔 | 30 分钟 | 可选 15 / 30 / 60 / 120 分钟（**WorkManager 系统最小 15 分钟**） |
+| 仅在指定 WiFi 下生效 | 空 | SSID 逗号分隔；空 = 不限；**读取 SSID 需要定位权限**（Android 10+） |
+| 常驻通知保活 | 关 | 前台服务保活，**国产 ROM 建议开启** |
+
+---
+
+## 后台保活（国产 ROM 必读）
+
+安卓系统会在你退到桌面、锁屏或内存紧张时冻结甚至杀掉后台 App，国产 ROM 尤为激进。想让自动登录真正生效，这四件事必须做：
+
+1. **自启动白名单**：允许本 App 自启动。
+2. **省电策略**：设为「无限制 / 不优化」，并加入电池优化白名单（App 内「打开电池优化设置」按钮可直达）。
+3. **允许通知**：Android 13 及以上必须授权通知权限，否则常驻通知起不来。
+4. **最近任务锁定**：在多任务界面给本 App 加锁，防止被一键清理掉。
+
+各品牌（小米 / 华为 / OPPO / vivo 等）的具体设置路径见 [02 - 国产 ROM 保活指引](docs/02-国产ROM保活指引.md)。
+
+---
+
+## 常见问题
+
+| 问题 | 一句话答案 |
+| --- | --- |
+| 一直显示「网关不可达」 | 当前不在校园网内，或网关地址填错了（默认 `172.16.80.3`） |
+| 登录失败 / 提示密码错误 | 多半是运营商选错了：校园用户**不要**加后缀，移动 `@yd`、电信 `@dx`、联通 `@lt` |
+| 显示已在线却打不开网页 | 会话可能未真正通网，手动断开 WiFi 重连，或点一次「立即登录」 |
+| App 过一会儿就不动了 | 保活没配好，按 [02 - 国产 ROM 保活指引](docs/02-国产ROM保活指引.md) 配自启动与省电白名单 |
+| 改了配置没生效 | 改完必须点「保存配置」，再点一次「立即登录」 |
+| 日志在哪里看 | App 主界面底部的「运行日志」区域 |
+
+更多问题（含每个配置项的含义）见 [03 - 使用与排错](docs/03-使用与排错.md)。
+
+---
 
 ## 安全说明
 
-- 你的账号密码只保存在**手机 App 自己的私有目录**里，其他 App 读不到，本工程里也**没有内置任何人的账号密码**。
-- 如果你把这个 App 分享给别人，别人需要自己填自己的账号密码。
-- 更详细的安全说明见 [03 - 使用与排错](docs/03-使用与排错.md) 的「安全说明」章节。
+- **明文 HTTP**：Dr.COM 认证全程走 HTTP，没有 TLS，链路可被监听或抓包，请勿在不可信网络下使用。
+- **密码存储**：密码保存在 App 私有目录的 `SharedPreferences` 中，**未额外加密**；manifest 已设 `android:allowBackup="false"`，其它 App 无法读取。
+- **debug 签名**：发布的是 debug 构建，由自动生成的 debug keystore 签名，**不适合正式分发**。
+- **仓库无内置凭据**：本仓库不含任何真实账号、密码或学号，使用者需自行填写自己的凭据。
+
+## 免责声明
+
+本项目**仅供个人学习，以及为自有账号做正常的校园网上网认证**使用。
+
+- 请遵守所在学校的网络管理规定。
+- **不得**用于任何未授权用途，包括但不限于：使用他人账号、批量认证、规避学校网络管理策略。
+- 使用本项目的风险由使用者自行承担。
+
+---
+
+## 文档索引
+
+| 文档 | 内容 | 什么时候看 |
+| --- | --- | --- |
+| [01 - 编译 APK](docs/01-编译APK.md) | 怎么让 GitHub 帮你打包、怎么下载、构建失败怎么办 | 走「路径 B」时 |
+| [02 - 国产 ROM 保活指引](docs/02-国产ROM保活指引.md) | 小米 / 华为 / OPPO / vivo 等机型的后台保活设置（**最重要**） | 装好 App 之后的必做一步 |
+| [03 - 使用与排错](docs/03-使用与排错.md) | 界面逐项说明、运营商怎么选、登录失败怎么查 | 用起来之后遇到问题 |
+
+## 版本记录
+
+| 版本 | 说明 |
+| --- | --- |
+| `v1.0` | 首个版本（`versionCode 1`）。含周期自动检查、开机自启、前台服务保活、SSID 过滤、内置状态面板与日志 |
+
+> 本版本为初始发布，目前尚无后续补丁版本。
