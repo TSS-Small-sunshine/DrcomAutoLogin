@@ -22,12 +22,40 @@ jobs:
         with:
           gradle-version: '8.9'
 
-      - name: Build debug APK
-        run: gradle assembleDebug --no-daemon --stacktrace
+      - name: Decode signing keystore
+        run: |
+          echo "${{ secrets.SIGNING_KEYSTORE_BASE64 }}" | base64 -d > "$RUNNER_TEMP/drcom-release.p12"
+          test -s "$RUNNER_TEMP/drcom-release.p12"
+          echo "keystore decoded: $(stat -c%s "$RUNNER_TEMP/drcom-release.p12") bytes"
+
+      - name: Build signed release APK
+        env:
+          SIGNING_KEYSTORE_PATH: ${{ runner.temp }}/drcom-release.p12
+          SIGNING_STORE_PASSWORD: ${{ secrets.SIGNING_STORE_PASSWORD }}
+          SIGNING_KEY_ALIAS: ${{ secrets.SIGNING_KEY_ALIAS }}
+          SIGNING_KEY_PASSWORD: ${{ secrets.SIGNING_KEY_PASSWORD }}
+        run: gradle assembleRelease --no-daemon --stacktrace
+
+      - name: Verify APK (signature + manifest)
+        run: |
+          set -e
+          APK=$(ls app/build/outputs/apk/release/*.apk | head -1)
+          echo "=== APK: $APK ==="
+          BT=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
+          echo "=== build-tools: $BT ==="
+          echo ""
+          echo "=== apksigner verify (必须 v1/v2/v3 全为 true) ==="
+          "$BT/apksigner" verify --verbose --print-certs "$APK"
+          echo ""
+          echo "=== aapt2 badging (包名 / minSdk / targetSdk) ==="
+          "$BT/aapt2" dump badging "$APK" | head -12
+          echo ""
+          echo "=== sha256 ==="
+          sha256sum "$APK"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: DrcomAutoLogin-APK
-          path: app/build/outputs/apk/debug/*.apk
+          path: app/build/outputs/apk/release/*.apk
           if-no-files-found: error

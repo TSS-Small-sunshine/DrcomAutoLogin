@@ -60,10 +60,22 @@
 | 平台 | GitHub Actions（`.github/workflows/build-apk.yml`） |
 | 触发条件 | push 到 `main` / `master`；也支持 `workflow_dispatch` 手动触发 |
 | Runner | `ubuntu-latest` |
-| 步骤 | `actions/checkout@v4` → `actions/setup-java@v4`（temurin 17）→ `gradle/actions/setup-gradle@v4`（Gradle 8.9）→ `gradle assembleDebug --no-daemon --stacktrace` → `actions/upload-artifact@v4` |
+| 步骤 | `actions/checkout@v4` → `actions/setup-java@v4`（temurin 17）→ `gradle/actions/setup-gradle@v4`（Gradle 8.9）→ **Decode signing keystore**（把 `SIGNING_KEYSTORE_BASE64` 解码成临时密钥库）→ `gradle assembleRelease --no-daemon --stacktrace` → **Verify APK**（`apksigner verify --verbose --print-certs` + `aapt2 dump badging`）→ `actions/upload-artifact@v4` |
 | Artifact 名 | **`DrcomAutoLogin-APK`** |
-| 产物路径 | **`app/build/outputs/apk/debug/app-debug.apk`** |
+| 产物路径 | **`app/build/outputs/apk/release/app-release.apk`** |
 | 实测构建耗时 | 约 **1 分 20 秒**（首次含依赖下载约 2-3 分钟） |
+
+### 签名
+
+| 项 | 值 |
+| --- | --- |
+| 签名类型 | release 正式签名（非 debug 签名） |
+| 密钥库 | PKCS12，RSA 2048，有效期 10000 天 |
+| 证书主体 | `CN=TSS-Small-sunshine, OU=DrcomAutoLogin, O=TSS-Small-sunshine, L=Fuzhou, ST=Fujian, C=CN` |
+| 签名方案 | **v1（JAR）+ v2 + v3 同时启用** |
+| 凭据来源 | GitHub Actions Secrets（仓库内不含任何密钥材料） |
+
+> 为什么同时开 v1：只签 v2 的 APK 在部分国产 ROM 上会被包解析器拒绝，报「解析软件包时出现问题 / packageInfo is null」。v1 兼容性最好，保留它没有副作用。
 
 ### 其它实现要点
 
@@ -73,7 +85,7 @@
 | JSON 解析 | Android 内置 `org.json`（**无** Gson / Moshi / kotlinx-serialization） |
 | 数据存储 | 平台 `SharedPreferences` |
 | 日志 | 应用私有目录下的日志文件，滚动保留最近 200 行，线程安全 |
-| 签名 | debug 构建，由 AGP **自动生成的 debug keystore** 签名；采用 **APK Signature Scheme v2**（因 `minSdk 26`，不再生成 v1 的 `META-INF/CERT.RSA`） |
+| 签名 | release 正式签名（见上文「签名」小节）；**v1（JAR）+ v2 + v3** 同时启用，凭据经 GitHub Secrets 注入 |
 | 实测 APK | 5.95 MB，896 个 ZIP 条目，含 `AndroidManifest.xml` / `classes.dex` / `resources.arsc` |
 | 明文流量 | 认证全程 HTTP 明文，manifest 已开启 `usesCleartextTraffic="true"` |
 
@@ -190,7 +202,7 @@ android/
 
 ### 路径 A：直接用现成 APK（不写代码）
 
-1. 打开仓库的 `Actions` 标签页 → 点进 `Build APK` 任务 → 拉到页面底部 `Artifacts` 区域 → 下载 **`DrcomAutoLogin-APK`**（得到 zip，解压出 `app-debug.apk`）。
+1. 打开仓库的 `Actions` 标签页 → 点进 `Build APK` 任务 → 拉到页面底部 `Artifacts` 区域 → 下载 **`DrcomAutoLogin-APK`**（得到 zip，解压出 `app-release.apk`）。
 2. 把 APK 传到手机安装（需按提示允许「安装未知应用」）。
 3. 打开 App，填上网账号 / 密码 / 运营商，点「保存配置」→ 点「立即登录」验证。
 4. 打开「自动检查」，然后按 [02 - 国产 ROM 保活指引](docs/02-国产ROM保活指引.md) 配好自启动与省电白名单。
@@ -268,7 +280,7 @@ android/
 
 - **明文 HTTP**：Dr.COM 认证全程走 HTTP，没有 TLS，链路可被监听或抓包，请勿在不可信网络下使用。
 - **密码存储**：密码保存在 App 私有目录的 `SharedPreferences` 中，**未额外加密**；manifest 已设 `android:allowBackup="false"`，其它 App 无法读取。
-- **debug 签名**：发布的是 debug 构建，由自动生成的 debug keystore 签名，**不适合正式分发**。
+- **正式签名**：发布的是 release 构建，由 PKCS12 正式密钥库签名（v1 + v2 + v3 同时启用）；密钥材料只存在于 GitHub Actions Secrets，仓库内不含任何密钥文件。
 - **仓库无内置凭据**：本仓库不含任何真实账号、密码或学号，使用者需自行填写自己的凭据。
 
 ## 免责声明

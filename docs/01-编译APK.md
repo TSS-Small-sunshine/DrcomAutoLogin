@@ -55,14 +55,16 @@ on:
 runs-on: ubuntu-latest
 ```
 
-用一台全新的 Ubuntu 云主机，每次都是干净环境。接着按顺序做 4 件事：
+用一台全新的 Ubuntu 云主机，每次都是干净环境。接着按顺序做 6 件事：
 
 | 步骤 | 作用 |
 | --- | --- |
 | `actions/checkout@v4` | 把你的仓库代码下载到编译机上 |
 | `actions/setup-java@v4`（temurin, 17） | 装 JDK 17（Android Gradle Plugin 8.5.2 要求至少 JDK 17） |
 | `gradle/actions/setup-gradle@v4`（8.9） | 装 Gradle 8.9 并开启依赖缓存 |
-| `gradle assembleDebug --no-daemon --stacktrace` | **真正开始编译** |
+| `Decode signing keystore` | 把 Secrets 里的密钥库（base64）解码成临时文件，供签名使用 |
+| `gradle assembleRelease --no-daemon --stacktrace` | **真正开始编译（并签名）** |
+| `Verify APK` | 打印 APK 的签名方案（`apksigner verify`）与包信息（`aapt2 dump badging`），确认产物正确 |
 
 > `--no-daemon`：编译机只用一次，不需要常驻进程，关掉更快更省内存。
 > `--stacktrace`：万一失败，日志里会带完整调用栈，方便排错。
@@ -74,11 +76,11 @@ runs-on: ubuntu-latest
   uses: actions/upload-artifact@v4
   with:
     name: DrcomAutoLogin-APK
-    path: app/build/outputs/apk/debug/*.apk
+    path: app/build/outputs/apk/release/*.apk
     if-no-files-found: error
 ```
 
-编译成功后，把 `app/build/outputs/apk/debug/` 下的 `.apk` 文件打包成一个名为 **`DrcomAutoLogin-APK`** 的 artifact（可以理解为「云端产物压缩包」）供你下载。
+编译成功后，把 `app/build/outputs/apk/release/` 下的 `.apk` 文件打包成一个名为 **`DrcomAutoLogin-APK`** 的 artifact（可以理解为「云端产物压缩包」）供你下载。
 
 `if-no-files-found: error` 的意思是：**如果没找到 apk 就直接报错**。这是故意的——防止编译其实失败了、却悄悄给你一个空的下载包。
 
@@ -106,11 +108,13 @@ runs-on: ubuntu-latest
 
 ```
 Set up job
-✓ Checkout            ← 下载你的代码
-✓ Set up JDK 17       ← 装 JDK
-✓ Set up Gradle       ← 装 Gradle
-✓ Build debug APK     ← 编译（耗时最久的一步）
-✓ Upload APK          ← 上传结果
+✓ Checkout                ← 下载你的代码
+✓ Set up JDK 17           ← 装 JDK
+✓ Set up Gradle           ← 装 Gradle
+✓ Decode signing keystore ← 解码签名密钥库
+✓ Build release APK       ← 编译并签名（耗时最久的一步）
+✓ Verify APK              ← 校验签名方案与包信息
+✓ Upload APK              ← 上传结果
 ✓ Complete job
 ```
 
@@ -118,7 +122,7 @@ Set up job
 - **黄色转圈 🟡**：这一步正在跑。
 - **红色叉 ❌**：这一步失败，点它展开可以看到详细报错。
 
-想看点开某一步的日志，直接点那一步的名字即可。排错时最需要看的是 **`Build debug APK`** 这一步的输出。
+想看点开某一步的日志，直接点那一步的名字即可。排错时最需要看的是 **`Build release APK`** 这一步的输出；想要签名与 SDK 版本的证据，看 **`Verify APK`** 那一步。
 
 ---
 
@@ -128,13 +132,22 @@ Set up job
 2. 拉到页面**最底部**，找到 **`Artifacts`** 区块。
 3. 点 **`DrcomAutoLogin-APK`**。
 4. 浏览器会下载一个 **zip 压缩包**。
-5. 解压这个 zip，得到 **`app-debug.apk`** ——这就是能装到手机上的安装包。
+5. 解压这个 zip，得到 **`app-release.apk`** ——这就是能装到手机上的安装包。
 
-> **为什么是 debug 包？**
-> debug 包是开发调试用的签名包，用 Android 自带调试证书签名，任何手机都能直接装（不需要上架应用商店）。本工程没有配置正式发布的 release 签名密钥（那需要你自己申请并保管密钥文件），所以用 debug 包最省事。
+> **这是正式签名的包吗？**
+> 是。CI 产出的是 **release 正式签名**包，同时启用了 **v1（JAR）+ v2 + v3** 三种签名方案。第三方来源侧载安装时 v1 签名是兼容性兜底——只签 v2 的包在部分国产 ROM 上会被包解析器拒绝，报「解析软件包时出现问题 / packageInfo is null」。
 >
-> **为什么文件名是 `app-debug.apk` 而不是中文名？**
-> Android 打包规则规定产物名来自模块名（`app`）和构建类型（`debug`）。安装到手机后显示的名称才是「Dr.COM 校园网自动登录」。
+> **为什么文件名是 `app-release.apk` 而不是中文名？**
+> Android 打包规则规定产物名来自模块名（`app`）和构建类型（`release`）。安装到手机后显示的名称才是「Dr.COM 校园网自动登录」。
+
+### 怎么确认这个 APK 签名正常
+
+`Verify APK` 这一步会把两样东西打印到日志里，可以直接当证据看：
+
+- **`apksigner verify --verbose --print-certs`**：列出签名方案，**v1 / v2 / v3 三项都应是 `true`**，并打印证书主体（`CN=TSS-Small-sunshine, OU=DrcomAutoLogin, ...`）。
+- **`aapt2 dump badging`**：打印包名 `com.drcom.autologin` 与 `sdkVersion`（`minSdk`）/ `targetSdkVersion`。
+
+再往下还有一行 `sha256`，是这次产物 APK 的校验值。
 
 ### 下载链接会过期
 
@@ -146,7 +159,7 @@ GitHub 的 artifact 默认**保留 90 天**，过期后链接失效。解决办�
 
 红色 ❌ 时，先点进失败的那一步看日志。下面是几种最常见的情况。
 
-### 情况 1：卡在 `Set up Gradle` 或 `Build debug APK`，日志里有 `timeout` / `Connection timed out` / `Could not resolve`
+### 情况 1：卡在 `Set up Gradle` 或 `Build release APK`，日志里有 `timeout` / `Connection timed out` / `Could not resolve`
 
 **原因**：编译机在下载 Gradle 或 Android 依赖时网络超时。这是 GitHub 服务器到 Maven 仓库之间的偶发网络问题，不是你代码的问题。
 
@@ -177,7 +190,7 @@ GitHub 的 artifact 默认**保留 90 天**，过期后链接失效。解决办�
 **处理**：
 
 1. 先重跑一次（下载中断很常见）。
-2. 持续失败时，可以在 `Build debug APK` 步骤**之前**加一步显式安装 SDK 组件：
+2. 持续失败时，可以在 `Build release APK` 步骤**之前**加一步显式安装 SDK 组件：
 
    ```yaml
    - name: Set up Android SDK
@@ -186,13 +199,13 @@ GitHub 的 artifact 默认**保留 90 天**，过期后链接失效。解决办�
 
    （`ubuntu-latest` 镜像本身就预装了 Android SDK，所以正常情况不需要这一步。）
 
-### 情况 5：`No files were found with the provided path: app/build/outputs/apk/debug/*.apk`
+### 情况 5：`No files were found with the provided path: app/build/outputs/apk/release/*.apk`
 
-**原因**：`Upload APK` 报这个错，说明**编译其实没产出 apk**。往上翻，真正的错误在 `Build debug APK` 那一步，通常是 Kotlin 语法错误或资源文件错误。
+**原因**：`Upload APK` 报这个错，说明**编译其实没产出 apk**。往上翻，真正的错误在 `Build release APK` 那一步，通常是 Kotlin 语法错误或资源文件错误。
 
 **处理**：
 
-1. 点开 `Build debug APK` 步骤，看日志里第一处 `e: ` 或 `error:` 开头的行（那才是根因）。
+1. 点开 `Build release APK` 步骤，看日志里第一处 `e: ` 或 `error:` 开头的行（那才是根因）。
 2. 如果你改过代码，把改动还原；如果没改过，直接重跑。
 
 ### 情况 6：`Actions` 页面根本没有 `Build APK` 这个 workflow
@@ -221,14 +234,14 @@ GitHub 的 artifact 默认**保留 90 天**，过期后链接失效。解决办�
 1. 修改源码（在网页上直接编辑，或用 GitHub Desktop / git 命令行 push）。
 2. `Commit changes` / `push` 到 `main` 分支。
 3. 等 `Actions` 自动编译完成。
-4. 下载新的 `DrcomAutoLogin-APK`，解压得到 `app-debug.apk`。
+4. 下载新的 `DrcomAutoLogin-APK`，解压得到 `app-release.apk`。
 5. 直接把新的 apk 覆盖安装到手机上。
 
 **覆盖安装的数据保留情况**：
 
 | 内容 | 覆盖安装后 |
 | --- | --- |
-| 账号、密码、服务器、端口、间隔等配置 | **保留**（debug 包签名不变） |
+| 账号、密码、服务器、端口、间隔等配置 | **保留**（release 包签名不变） |
 | 日志文件 | **保留** |
 | App 图标和名称 | 不变 |
 
@@ -253,7 +266,7 @@ A：公开仓库（Public）的 Actions 完全免费不限额；私有仓库（P
 A：workflow 里监听的是 `main` 和 `master` 两个分支，用哪个都行，但**必须**是这两个名字之一，叫 `dev` 之类的分支不会触发自动编译。
 
 **Q：能一次编译出正式发布版吗？**
-A：可以，但需要你自己生成签名密钥（keystore）并把密钥用 GitHub Secrets 存起来，然后在 workflow 里加 `assembleRelease` 步骤。对个人自用来说没必要，debug 包完全够用。
+A：本工程**已经**是正式发布版：workflow 直接产出 **release 正式签名**的 APK。签名密钥（PKCS12 keystore）的密钥材料以 GitHub Secrets 形式存放，仓库里不含任何密钥文件；想换成自己的密钥，把 `SIGNING_KEYSTORE_BASE64` / `SIGNING_STORE_PASSWORD` / `SIGNING_KEY_ALIAS` / `SIGNING_KEY_PASSWORD` 这 4 个 Secrets 替换掉即可。
 
 **Q：为什么编译好的 App 装的时候会被手机管家警告？**
-A：因为它是 debug 签名 + 非应用商店来源，属于正常现象，选择「继续安装 / 仍要安装」即可。
+A：因为它是正式签名 + 非应用商店来源，属于正常现象，选择「继续安装 / 仍要安装」即可。
