@@ -37,12 +37,14 @@
     <string name="hint_ssid_filter">SSID，逗号分隔；留空=不限（需要定位权限）</string>
     <string name="label_keep_alive">常驻通知保活</string>
     <string name="hint_keep_alive">国产 ROM 建议开启，避免后台被系统清理</string>
+    <string name="hint_overlay_perm">授予悬浮窗权限后，后台掉线时也能自动拉起「网页版登录」</string>
     <string name="label_mac_type">终端类型</string>
     <string name="hint_mac_type">若提示「PC终端在线数已上限」，换一个终端类型再试（手机/平板/PC/不发送）</string>
 
     <string name="btn_save">保存配置</string>
     <string name="btn_login_now">立即登录</string>
     <string name="btn_battery">打开电池优化设置</string>
+    <string name="btn_overlay">授予悬浮窗权限</string>
     <string name="btn_clear_log">清除日志</string>
     <string name="btn_refresh_log">刷新日志</string>
 
@@ -52,9 +54,12 @@
     <string name="toast_bad_port">端口需在 1-65535 之间</string>
     <string name="toast_saved">配置已保存</string>
     <string name="toast_login_queued">已提交一次登录检查</string>
+    <string name="toast_webview_started">已启动网页版登录，稍后看状态与日志</string>
+    <string name="toast_webview_failed">无法启动网页版登录</string>
     <string name="toast_log_cleared">日志已清除</string>
     <string name="toast_permission_denied">权限被拒绝，指定 WiFi / 保活通知可能不可用</string>
     <string name="toast_battery_unavailable">无法打开电池优化设置</string>
+    <string name="toast_overlay_unavailable">无法打开悬浮窗授权页</string>
 
     <string name="notify_channel_name">自动登录保活</string>
     <string name="notify_channel_desc">保持校园网自动登录在后台运行</string>

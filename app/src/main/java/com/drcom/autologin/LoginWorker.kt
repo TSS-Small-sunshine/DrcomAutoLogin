@@ -1,6 +1,8 @@
 package com.drcom.autologin
 
 import android.content.Context
+import android.content.Intent
+import android.provider.Settings
 import androidx.work.Worker
 import androidx.work.WorkerParameters
 
@@ -33,6 +35,8 @@ class LoginWorker(
         }
 
         try {
+            // 离线时 runOnce 会先尝试启动网页版登录（见 tryStartPortalLogin），
+            // 启动不了才退回 HTTP 登录。
             LoginEngine.runOnce(ctx, reason)
         } catch (t: Throwable) {
             LogStore.log(ctx, "ERROR", "执行异常: " + (t.message ?: t.javaClass.simpleName))
@@ -43,5 +47,42 @@ class LoginWorker(
 
     companion object {
         const val KEY_REASON = "reason"
+
+        /** 离线时尝试用「网页版登录」（WebView 跑门户页面 JS）接管本次登录。
+         *
+         *  为什么要有它：AC 的终端归类（PC / 手机）不取决于 HTTP 参数，实测 App 直接请求
+         *  `/eportal/portal/login` 会被一律归成 PC 终端，只有浏览器同款流程才被正确归类。
+         *
+         *  Android 10+ 后台启动 Activity 需要「显示在其他应用上层（悬浮窗）」权限；
+         *  没有权限时**不尝试**启动，只写一条日志，由调用方继续走原有 HTTP 登录兜底。
+         *
+         *  @return true 表示已成功发起启动请求（登录结果由 PortalLoginActivity 自己写状态）
+         */
+        fun tryStartPortalLogin(
+            ctx: Context,
+            userIp: String,
+            userMac: String,
+            acIp: String,
+            acName: String
+        ): Boolean {
+            if (!Settings.canDrawOverlays(ctx)) {
+                LogStore.log(
+                    ctx, "WARN",
+                    "WebView 未授予悬浮窗权限，后台无法启动网页版登录；请打开 App 手动登录或授予该权限"
+                )
+                return false
+            }
+            return try {
+                val intent = PortalLoginActivity
+                    .buildIntent(ctx, userIp, userMac, acIp, acName)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                ctx.startActivity(intent)
+                LogStore.log(ctx, "INFO", "WebView 已启动网页版登录")
+                true
+            } catch (t: Throwable) {
+                LogStore.log(ctx, "WARN", "WebView 启动网页版登录失败: " + (t.message ?: t.javaClass.simpleName))
+                false
+            }
+        }
     }
 }

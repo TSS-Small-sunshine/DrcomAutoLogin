@@ -54,12 +54,13 @@ class MainActivity : AppCompatActivity() {
 
         binding.btnLoginNow.setOnClickListener {
             if (applyConfig(false)) {
-                Scheduler.runNow(this, Scheduler.REASON_MANUAL)
-                toast(getString(R.string.toast_login_queued))
+                startPortalLogin()
             }
         }
 
         binding.btnBattery.setOnClickListener { openBatterySettings() }
+
+        binding.btnOverlay.setOnClickListener { openOverlaySettings() }
 
         binding.btnClearLog.setOnClickListener {
             LogStore.clear(this)
@@ -271,6 +272,34 @@ class MainActivity : AppCompatActivity() {
             } catch (_: Throwable) {
                 toast(getString(R.string.toast_battery_unavailable))
             }
+        }
+    }
+
+    /** 授予「显示在其他应用上层（悬浮窗）」权限：后台掉线时才能自动拉起网页版登录。 */
+    private fun openOverlaySettings() {
+        try {
+            startActivity(
+                Intent(
+                    Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                    Uri.parse("package:$packageName")
+                )
+            )
+        } catch (t: Throwable) {
+            LogStore.log(this, "WARN", "打开悬浮窗授权页失败: " + (t.message ?: t.javaClass.simpleName))
+            toast(getString(R.string.toast_overlay_unavailable))
+        }
+    }
+
+    /** 手动「立即登录」：不再走 HTTP 接口，直接用 WebView 跑门户页面（复刻浏览器行为），
+     *  避免被 AC 归成 PC 终端（「该账号PC终端在线数已上限」）。 */
+    private fun startPortalLogin() {
+        try {
+            LogStore.log(this, "INFO", "WebView 手动触发：启动网页版登录")
+            startActivity(PortalLoginActivity.buildIntent(this))
+            toast(getString(R.string.toast_webview_started))
+        } catch (t: Throwable) {
+            LogStore.log(this, "ERROR", "WebView 启动网页版登录失败: " + (t.message ?: t.javaClass.simpleName))
+            toast(getString(R.string.toast_webview_failed))
         }
     }
 

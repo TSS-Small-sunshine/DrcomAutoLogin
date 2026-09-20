@@ -6,4 +6,16 @@
         <item name="colorAccent">@color/colorAccent</item>
         <item name="android:statusBarColor">@color/colorPrimaryDark</item>
     </style>
+
+    <!-- 网页版登录（PortalLoginActivity）用的全透明主题：不显示任何界面，
+         只让 WebView 真正 attach 到窗口上跑门户页面的 JS。
+         注意：PortalLoginActivity 继承 android.app.Activity（不是 AppCompatActivity），
+         所以这里可以安全地继承系统主题，不需要 AppCompat 主题。 -->
+    <style name="Theme.Transparent" parent="android:Theme.Translucent.NoTitleBar">
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:backgroundDimEnabled">false</item>
+        <item name="android:windowAnimationStyle">@null</item>
+    </style>
 </resources>

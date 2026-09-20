@@ -35,7 +35,8 @@ private const val PORTAL_AC_HOST = "172.16.80.2"
 object LoginEngine {
 
     // 真实移动端 Chrome UA：门户用 util.getTermType() 按 UA 判断设备类型，自定义串会被识别成未知终端
-    private const val USER_AGENT =
+    // （网页版登录 PortalLoginActivity 的 WebView 也用同一个 UA，避免两处硬编码）
+    internal const val USER_AGENT =
         "Mozilla/5.0 (Linux; Android 13; 22127RK46C) AppleWebKit/537.36 " +
             "(KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
     private const val DEFAULT_TIMEOUT_MS = 10000
@@ -328,8 +329,9 @@ object LoginEngine {
 
     // ---------------------------------------------------------- 强制门户参数
 
-    /** 网关视角的门户参数（从强制门户的 Location 头或门户页正文里解析）。 */
-    private data class PortalParams(
+    /** 网关视角的门户参数（从强制门户的 Location 头或门户页正文里解析）。
+     *  internal：网页版登录（PortalLoginActivity）补参数时复用同一套解析结果。 */
+    internal data class PortalParams(
         val userIp: String,
         val mac: String,      // 已归一化为 12 位大写十六进制（去掉 - 和 :）
         val acIp: String,
@@ -420,8 +422,9 @@ object LoginEngine {
      *  Location 头 / 绝对化后的重定向地址 / 响应正文 三个来源解析
      *  wlanuserip / mac / wlanacip / wlancname。任一命中即返回；全部失败返回 null。
      *  每个探测地址无论成功失败都写一条完整日志，便于远程诊断。
-     *  全程只读，不改变任何服务端状态。 */
-    private fun discoverPortalParams(ctx: Context): PortalParams? {
+     *  全程只读，不改变任何服务端状态。
+     *  internal：网页版登录（PortalLoginActivity）补齐网关参数时复用。 */
+    internal fun discoverPortalParams(ctx: Context): PortalParams? {
         val probes = listOf(
             // 小米自带强制门户探测地址（本机是小米，系统自己就用这个，最可能被网关拦截）
             "http://connect.rom.miui.com/generate_204",
@@ -646,6 +649,16 @@ object LoginEngine {
             "最终提交参数来源: wlan_user_ip=$userIp(来源=$ipFrom) wlan_user_mac=$userMac(来源=$macFrom)"
         )
         LogStore.log(ctx, "INFO", "正在登录 ${cfg.account}${cfg.suffix} ...")
+
+        // 首选：网页版登录（WebView 跑门户页面自己的 JS，复刻浏览器行为）。
+        // 实测 HTTP 直连 /eportal/portal/login 会被 AC 一律归成 PC 终端（「PC终端在线数已上限」），
+        // 只有门户页面自己提交出来的会话才会被正确归类。后台启动 Activity 需要悬浮窗权限，
+        // 拿不到权限或启动失败时（返回 false）继续走下面的 HTTP 登录兜底，行为不劣于以前。
+        if (LoginWorker.tryStartPortalLogin(ctx, userIp, userMac, acIp, acName)) {
+            LogStore.log(ctx, "INFO", "WebView 已接管本次登录，跳过 HTTP 登录")
+            Prefs.saveStatus(ctx, networkReachable = true, online = false, lastError = null)
+            return false
+        }
 
         val (ok, msg) = login(ctx, cfg, userIp, userMac, acIp, acName)
         if (ok) {
